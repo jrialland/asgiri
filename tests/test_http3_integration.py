@@ -15,6 +15,7 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 
 from asgiri.server import Server
+from asgiri.ssl_utils import generate_self_signed_cert
 from tests.app import app
 
 
@@ -122,16 +123,16 @@ async def http3_server(request):
     # Use the existing server.crt and server.key in the project root
     import os
     project_root = os.path.dirname(os.path.dirname(__file__))
-    certfile = os.path.join(project_root, "server.crt")
-    keyfile = os.path.join(project_root, "server.key")
     
+    cert_data, key_data = generate_self_signed_cert()
+
     server = Server(
         app,
         host="127.0.0.1",
         port=port,
         enable_http3=True,
-        certfile=certfile,
-        keyfile=keyfile,
+        cert_data=cert_data,
+        key_data=key_data,
     )
 
     # Start server in background
