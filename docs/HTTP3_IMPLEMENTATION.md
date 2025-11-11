@@ -9,6 +9,11 @@ Asgiri now supports **HTTP/3** (HTTP over QUIC), the latest version of the HTTP 
 - **Improved multiplexing**: True stream independence without head-of-line blocking
 - **Built-in encryption**: TLS 1.3 is mandatory and integrated into QUIC
 
+### Related Documentation
+
+- **[WebSocket over HTTP/3](WEBSOCKETS_HTTP3.md)** - RFC 9220 implementation for WebSocket support over HTTP/3
+- **[WebTransport](WEBTRANSPORT.md)** - WebTransport protocol support over HTTP/3
+
 ## Architecture
 
 ### Dual Transport Design
@@ -365,7 +370,8 @@ curl -I https://localhost:8443/ -k | grep -i alt-svc
 
 ### Planned Features
 
-- [ ] **WebTransport**: Bidirectional streams over HTTP/3
+- [x] **WebSocket over HTTP/3**: RFC 9220 implementation - [See Documentation](WEBSOCKETS_HTTP3.md)
+- [x] **WebTransport**: Bidirectional streams over HTTP/3 - [See Documentation](WEBTRANSPORT.md)
 - [ ] **0-RTT Resumption**: Connection resumption for returning clients
 - [ ] **Connection Migration**: Seamless connection handoff between networks
 - [ ] **QPACK Dictionary**: Custom compression dictionaries
@@ -379,8 +385,11 @@ The current implementation provides a solid foundation for HTTP/3 support. Futur
 
 - [RFC 9114 - HTTP/3](https://www.rfc-editor.org/rfc/rfc9114.html)
 - [RFC 9000 - QUIC](https://www.rfc-editor.org/rfc/rfc9000.html)
+- [RFC 9220 - WebSocket over HTTP/3](https://www.rfc-editor.org/rfc/rfc9220.html)
 - [aioquic Documentation](https://aioquic.readthedocs.io/)
 - [Alt-Svc Header](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Alt-Svc)
+- [WebSocket over HTTP/3 Guide](WEBSOCKETS_HTTP3.md)
+- [WebTransport Guide](WEBTRANSPORT.md)
 
 ## License
 
