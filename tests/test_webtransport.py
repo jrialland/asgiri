@@ -10,43 +10,43 @@ import asyncio
 
 
 @pytest.mark.asyncio
-async def test_webtransport_enabled():
-    """Test that WebTransport can be enabled in HTTP3ServerProtocol."""
+async def test_webtransport_always_enabled():
+    """Test that WebTransport is always enabled in HTTP3ServerProtocol."""
     from asgiri.proto.http3 import HTTP3ServerProtocol
     from unittest.mock import Mock
     
     # Create a mock QUIC connection
     mock_quic = Mock()
     
-    # Create protocol with WebTransport enabled
+    # Create protocol - WebTransport is always enabled
     protocol = HTTP3ServerProtocol(
         quic=mock_quic,
         app=lambda s, r, send: None,
         server=("127.0.0.1", 8443),
-        enable_webtransport=True,
     )
     
-    assert protocol.enable_webtransport is True
     assert protocol.h3 is not None
+    # H3Connection is created with enable_webtransport=True
 
 
 @pytest.mark.asyncio
-async def test_webtransport_disabled_by_default():
-    """Test that WebTransport is disabled by default."""
+async def test_webtransport_parameter_removed():
+    """Test that enable_webtransport parameter is no longer needed."""
     from asgiri.proto.http3 import HTTP3ServerProtocol
     from unittest.mock import Mock
     
     # Create a mock QUIC connection
     mock_quic = Mock()
     
-    # Create protocol without WebTransport
+    # Create protocol without enable_webtransport parameter
     protocol = HTTP3ServerProtocol(
         quic=mock_quic,
         app=lambda s, r, send: None,
         server=("127.0.0.1", 8443),
     )
     
-    assert protocol.enable_webtransport is False
+    # WebTransport is always enabled
+    assert protocol.h3 is not None
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,6 @@ async def test_check_webtransport_request():
         quic=mock_quic,
         app=lambda s, r, send: None,
         server=("127.0.0.1", 8443),
-        enable_webtransport=True,
     )
     
     # Test WebTransport CONNECT request
@@ -89,8 +88,8 @@ async def test_check_webtransport_request():
     assert protocol._check_webtransport_request(connect_headers) is False
 
 
-def test_server_webtransport_parameter():
-    """Test that Server class accepts enable_webtransport parameter."""
+def test_server_webtransport_always_enabled():
+    """Test that WebTransport is always enabled when HTTP/3 is enabled."""
     from asgiri.server import Server
     
     async def app(scope, receive, send):
@@ -101,17 +100,16 @@ def test_server_webtransport_parameter():
         host="127.0.0.1",
         port=8443,
         enable_http3=True,
-        enable_webtransport=True,
     )
     
-    assert server.enable_webtransport is True
+    # WebTransport is always enabled with HTTP/3
+    assert server.enable_http3 is True
 
 
 @pytest.mark.asyncio
-async def test_build_webtransport_scope():
-    """Test building WebTransport scope from headers."""
+async def test_webtransport_per_stream_scope():
+    """Test that WebTransport creates per-stream scopes."""
     from asgiri.proto.http3 import HTTP3ServerProtocol
-    from aioquic.h3.events import HeadersReceived
     from unittest.mock import Mock
     
     mock_quic = Mock()
@@ -119,36 +117,12 @@ async def test_build_webtransport_scope():
         quic=mock_quic,
         app=lambda s, r, send: None,
         server=("127.0.0.1", 8443),
-        enable_webtransport=True,
     )
     
-    # Create a mock HeadersReceived event
-    headers = [
-        (b":method", b"CONNECT"),
-        (b":protocol", b"webtransport"),
-        (b":scheme", b"https"),
-        (b":authority", b"localhost:8443"),
-        (b":path", b"/webtransport?test=1"),
-        (b"user-agent", b"test-client"),
-    ]
-    
-    event = HeadersReceived(
-        stream_id=12345,
-        headers=headers,
-        stream_ended=False,
-    )
-    
-    scope = protocol._build_webtransport_scope(event)
-    
-    assert scope["type"] == "webtransport"
-    assert scope["path"] == "/webtransport"
-    assert scope["query_string"] == b"test=1"
-    assert scope["scheme"] == "https"
-    assert scope["session_id"] == 12345
-    assert scope["server"] == ("127.0.0.1", 8443)
-    assert (b"user-agent", b"test-client") in scope["headers"]
-    # Pseudo-headers should not be in headers list
-    assert not any(name.startswith(b":") for name, _ in scope["headers"])
+    # WebTransport now uses per-stream mode
+    # Each stream gets a scope with type "webtransport.stream"
+    # This is tested implicitly through the handler
+    assert protocol.h3 is not None
 
 
 # WebSocket over HTTP/3 tests

@@ -46,23 +46,24 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         *args: Any,
         app: ASGIApplication,
         server: tuple[str, int],
-        enable_webtransport: bool = False,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.app = app
         self.server = server
-        self.enable_webtransport = enable_webtransport
-        self.h3 = H3Connection(self._quic, enable_webtransport=enable_webtransport)
+        self.h3 = H3Connection(self._quic, enable_webtransport=True)
 
         # Track active streams and their state
         self.stream_handlers: dict[int, asyncio.Task] = {}
         self.stream_receivers: dict[int, asyncio.Queue] = {}
         self.stream_ended: dict[int, bool] = {}
 
-        # Track WebTransport sessions
-        self.webtransport_sessions: dict[int, asyncio.Task] = {}
+        # Track WebTransport sessions (session_id -> None, just tracking)
+        self.webtransport_sessions: dict[int, None] = {}
+        
+        # Track WebTransport per-stream handlers: (session_id, stream_id) -> task
+        self.webtransport_stream_handlers: dict[tuple[int, int], asyncio.Task] = {}
         self.webtransport_stream_receivers: dict[int, asyncio.Queue] = {}
         self.webtransport_stream_ended: dict[int, bool] = {}
 
@@ -120,9 +121,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         """
         try:
             # Check if this is a WebTransport CONNECT request
-            if self.enable_webtransport and self._check_webtransport_request(
-                event.headers
-            ):
+            if self._check_webtransport_request(event.headers):
                 self._handle_webtransport_connect(event)
                 return
 
@@ -282,6 +281,8 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
     def _handle_webtransport_connect(self, event: HeadersReceived) -> None:
         """
         Handle a WebTransport CONNECT request.
+        
+        Per-stream mode: Accept session immediately, handle each stream individually.
 
         Args:
             event: HeadersReceived event for the CONNECT request
@@ -291,14 +292,18 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         self.logger.info(f"WebTransport session requested on stream {session_id}")
 
         try:
-            # Build a custom WebTransport scope
-            scope = self._build_webtransport_scope(event)
-
-            # Create and track the session handler task
-            task = asyncio.create_task(
-                self._run_webtransport_session(scope, session_id)
-            )
-            self.webtransport_sessions[session_id] = task
+            # Send 200 OK to accept the WebTransport session
+            response_headers = [
+                (b":status", b"200"),
+                (b"sec-webtransport-http3-draft", b"draft02"),
+            ]
+            self.h3.send_headers(session_id, response_headers)
+            self.transmit()
+            
+            # Track this as an active WebTransport session
+            self.webtransport_sessions[session_id] = None
+            
+            self.logger.info(f"WebTransport session {session_id} accepted")
 
         except Exception as e:
             self.logger.exception(
@@ -602,29 +607,45 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         self, event: WebTransportStreamDataReceived
     ) -> None:
         """
-        Handle WebTransport stream data.
+        Handle WebTransport stream data in per-stream mode.
+        
+        Each stream gets its own ASGI application instance.
 
         Args:
             event: WebTransportStreamDataReceived event
         """
-        stream_id = event.stream_id
         session_id = event.session_id
-
-        # Create receiver queue for this stream if it doesn't exist
-        if stream_id not in self.webtransport_stream_receivers:
-            self.webtransport_stream_receivers[stream_id] = asyncio.Queue()
-
-        # Queue data for the receiver
-        self.webtransport_stream_receivers[stream_id].put_nowait(event.data)
-
-        # Mark if stream ended
-        if event.stream_ended:
-            self.webtransport_stream_ended[stream_id] = True
+        stream_id = event.stream_id
+        data = event.data
+        stream_ended = event.stream_ended
 
         self.logger.debug(
-            f"WebTransport stream {stream_id} (session {session_id}) "
-            f"received {len(event.data)} bytes, ended={event.stream_ended}"
+            f"WebTransport stream data: session={session_id}, stream={stream_id}, "
+            f"len={len(data)}, ended={stream_ended}"
         )
+        
+        # Key for tracking this specific stream
+        key = (session_id, stream_id)
+        
+        # Check if we already have a handler for this stream
+        if key in self.webtransport_stream_handlers:
+            # Feed data to existing handler
+            if stream_id in self.webtransport_stream_receivers:
+                queue = self.webtransport_stream_receivers[stream_id]
+                asyncio.create_task(queue.put({
+                    "type": "webtransport.stream.receive",
+                    "data": data,
+                    "stream_ended": stream_ended,
+                }))
+                
+                if stream_ended:
+                    self.webtransport_stream_ended[stream_id] = True
+        else:
+            # New stream - create a handler for it
+            task = asyncio.create_task(
+                self._handle_webtransport_stream(session_id, stream_id, data, stream_ended)
+            )
+            self.webtransport_stream_handlers[key] = task
 
     def _check_webtransport_request(self, headers: list[tuple[bytes, bytes]]) -> bool:
         """
@@ -648,112 +669,133 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
 
         return method == b"CONNECT" and protocol == b"webtransport"
 
+    async def _handle_webtransport_stream(
+        self,
+        session_id: int,
+        stream_id: int,
+        initial_data: bytes,
+        stream_ended: bool,
+    ) -> None:
+        """
+        Handle a WebTransport stream in per-stream mode.
+        
+        Each stream gets its own ASGI application instance.
+        
+        Args:
+            session_id: The WebTransport session ID
+            stream_id: The stream ID within the session
+            initial_data: Initial data received on this stream
+            stream_ended: Whether the stream ended with initial data
+        """
+        self.logger.debug(f"Handling WebTransport stream {stream_id} in session {session_id}")
+        
+        # Build scope for this specific stream
+        scope = {
+            "type": "webtransport.stream",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "3",
+            "session_id": session_id,
+            "stream_id": stream_id,
+            "server": self.server,
+        }
+        
+        # Create queue for this stream's data
+        stream_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        
+        # Put initial data in queue
+        await stream_queue.put({
+            "type": "webtransport.stream.receive",
+            "data": initial_data,
+            "stream_ended": stream_ended,
+        })
+        
+        # Track stream state
+        stream_finished = stream_ended
+        
+        async def receive() -> dict[str, Any]:
+            """Receive messages for this stream."""
+            if stream_finished:
+                return {"type": "webtransport.stream.disconnect"}
+            
+            return await stream_queue.get()
+        
+        async def send(message: dict[str, Any]) -> None:
+            """Send messages for this stream."""
+            nonlocal stream_finished
+            
+            if message["type"] == "webtransport.stream.send":
+                data = message.get("data", b"")
+                end_stream = message.get("end_stream", False)
+                
+                if data or end_stream:
+                    self.h3.send_data(stream_id, data, end_stream=end_stream)
+                    self.transmit()
+                
+                if end_stream:
+                    stream_finished = True
+                    self.webtransport_stream_ended[stream_id] = True
+            
+            elif message["type"] == "webtransport.stream.close":
+                # Close the stream
+                self.h3.send_data(stream_id, b"", end_stream=True)
+                self.transmit()
+                stream_finished = True
+                self.webtransport_stream_ended[stream_id] = True
+        
+        try:
+            # Store the queue so we can feed it data
+            self.webtransport_stream_receivers[stream_id] = stream_queue
+            
+            # Call the ASGI application for this stream
+            app = cast(ASGI3Application, self.app)
+            await app(scope, receive, send)
+            
+        except Exception as e:
+            self.logger.error(f"Error in WebTransport stream {stream_id}: {e}", exc_info=True)
+        
+        finally:
+            # Cleanup
+            self.webtransport_stream_receivers.pop(stream_id, None)
+            self.webtransport_stream_ended.pop(stream_id, None)
+            
+            # Remove from handlers
+            key = (session_id, stream_id)
+            self.webtransport_stream_handlers.pop(key, None)
+            
+            self.logger.debug(f"WebTransport stream {stream_id} handler completed")
+
     async def _run_webtransport_session(
         self, scope: dict[str, Any], session_id: int
     ) -> None:
         """
-        Run a WebTransport session.
-
-        Args:
-            scope: ASGI scope dictionary (custom WebTransport scope)
-            session_id: WebTransport session identifier
+        DEPRECATED: Session mode removed. WebTransport now uses per-stream mode only.
+        This method is kept for backward compatibility but does nothing.
         """
-        # Note: WebTransport is not yet standardized in ASGI.
-        # This is a custom implementation that applications can use.
-        # The scope type is "webtransport" with custom receive/send callables.
-
-        receiver = self._create_webtransport_receiver(session_id)
-        sender = self._create_webtransport_sender(session_id)
-
-        try:
-            app = cast(ASGI3Application, self.app)
-            await app(scope, receiver, sender)
-        except Exception as e:
-            self.logger.exception(
-                f"Error in ASGI app for WebTransport session {session_id}: {e}"
-            )
-        finally:
-            # Cleanup
-            self.webtransport_sessions.pop(session_id, None)
+        self.logger.warning(
+            "WebTransport session mode is deprecated. Use per-stream mode instead."
+        )
 
     def _create_webtransport_receiver(self, session_id: int) -> ASGIReceiveCallable:
         """
-        Create ASGI receive callable for WebTransport session.
-
-        Args:
-            session_id: WebTransport session identifier
-
-        Returns:
-            ASGI receive callable
+        DEPRECATED: Session mode removed.
         """
-
         async def receive() -> dict[str, Any]:
-            """
-            Receive WebTransport events.
-
-            Returns:
-                ASGI receive message (custom format for WebTransport)
-            """
-            # This is a placeholder implementation
-            # Real implementation would need to handle:
-            # - New stream creation
-            # - Stream data
-            # - Stream closure
-            # - Datagrams
-            await asyncio.sleep(0.1)
-            return {
-                "type": "webtransport.disconnect",
-            }
-
+            return {"type": "webtransport.disconnect"}
         return cast(ASGIReceiveCallable, receive)
 
     def _create_webtransport_sender(self, session_id: int) -> ASGISendCallable:
         """
-        Create ASGI send callable for WebTransport session.
-
-        Args:
-            session_id: WebTransport session identifier
-
-        Returns:
-            ASGI send callable
+        DEPRECATED: Session mode removed.
         """
-
         async def send(message: dict[str, Any]) -> None:
-            """
-            Send WebTransport messages.
-
-            Args:
-                message: ASGI send message (custom format for WebTransport)
-            """
-            msg_type = message.get("type", "")
-
-            if msg_type == "webtransport.accept":
-                # Accept the WebTransport session
-                # Send 200 OK response
-                headers = [
-                    (b":status", b"200"),
-                    (b"sec-webtransport-http3-draft", b"draft02"),
-                ]
-                self.h3.send_headers(session_id, headers)
-                self.transmit()
-
-            elif msg_type == "webtransport.close":
-                # Close the session
-                # This would involve closing all streams and the session
-                pass
-
-            elif msg_type == "webtransport.stream.send":
-                # Send data on a WebTransport stream
-                stream_id = message.get("stream_id")
-                data = message.get("data", b"")
-                end_stream = message.get("end_stream", False)
-
-                if stream_id is not None:
-                    # Use H3Connection to send data on the stream
-                    self.h3.send_data(stream_id, data, end_stream=end_stream)
-                    self.transmit()
-
+            pass
         return cast(ASGISendCallable, send)
+
+    def _build_webtransport_scope(self, event: HeadersReceived) -> dict[str, Any]:
+        """
+        DEPRECATED: Session mode removed.
+        """
+        return {}
 
 
 class HTTP3WebSocketHandler:
