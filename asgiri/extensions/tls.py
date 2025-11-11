@@ -18,7 +18,9 @@ cipher_suite (integer or None) – The TLS cipher suite that is being used. This
 """
 
 import ssl
+from typing import Any, cast
 from asgiref.typing import (
+    ASGIApplication,
     ASGI3Application,
     Scope,
     ASGIReceiveCallable,
@@ -31,7 +33,7 @@ class TLSExtensionMiddleware:
     ASGI middleware that adds TLS extension support to the scope.
     """
 
-    def __init__(self, app: ASGI3Application, ssl_context: ssl.SSLContext) -> None:
+    def __init__(self, app: ASGIApplication, ssl_context: ssl.SSLContext) -> None:
         self.app = app
         self.ssl_context = ssl_context
 
@@ -42,7 +44,7 @@ class TLSExtensionMiddleware:
         send: ASGISendCallable,
     ) -> None:
         if scope["type"] == "http" or scope["type"] == "websocket":
-            tls_info = {
+            tls_info: dict[str, Any] = {
                 "server_cert": None,
                 "client_cert_chain": [],
                 "client_cert_name": None,
@@ -53,7 +55,7 @@ class TLSExtensionMiddleware:
 
             # Attempt to extract TLS information from the SSL context
             transport = scope.get("transport")
-            if transport is not None:
+            if transport is not None and hasattr(transport, "get_extra_info"):
                 ssl_object = transport.get_extra_info("ssl_object")
                 if ssl_object is not None:
                     # Server certificate
@@ -62,7 +64,8 @@ class TLSExtensionMiddleware:
                         tls_info["server_cert"] = ssl.DER_cert_to_PEM_cert(cert)
 
                     # TLS version
-                    tls_info["tls_version"] = ssl_object.version()
+                    version = ssl_object.version()
+                    tls_info["tls_version"] = version
 
                     # Cipher suite
                     cipher = ssl_object.cipher()
@@ -71,10 +74,16 @@ class TLSExtensionMiddleware:
                         # We need to convert the name to its corresponding integer value
                         # This is a simplified approach; in a real implementation, you would
                         # need a mapping from cipher names to their integer values.
-                        tls_info["cipher_suite"] = cipher[0]
+                        cipher_name: str = cipher[0]
+                        tls_info["cipher_suite"] = cipher_name
 
             if "extensions" not in scope:
                 scope["extensions"] = {}
-            scope["extensions"]["tls"] = tls_info
+            extensions = scope["extensions"]
+            if extensions is not None:
+                # Cast tls_info to match the expected type in extensions dict
+                extensions["tls"] = cast(dict[object, object], tls_info)
 
-        await self.app(scope, receive, send)
+        # Cast to ASGI3Application since we're using it as an ASGI3 app
+        app = cast(ASGI3Application, self.app)
+        await app(scope, receive, send)

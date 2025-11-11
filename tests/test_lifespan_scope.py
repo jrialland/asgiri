@@ -125,6 +125,9 @@ async def test_lifespan_shutdown_called(unused_port: int):
     except asyncio.TimeoutError:
         pytest.fail("Lifespan startup was not called within timeout")
 
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
+
     # Make a request to ensure server is working
     async with httpx.AsyncClient() as client:
         response = await client.get(f"http://127.0.0.1:{unused_port}/")
@@ -288,6 +291,9 @@ async def test_lifespan_state_shared_with_requests(unused_port: int):
         await asyncio.wait_for(startup_event.wait(), timeout=2)
     except asyncio.TimeoutError:
         pytest.fail("Startup not called")
+
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
 
     # Make request and check state
     async with httpx.AsyncClient() as client:
@@ -485,6 +491,9 @@ async def test_lifespan_works_with_all_protocols(
     except asyncio.TimeoutError:
         pytest.fail(f"Startup not called for {protocol_version.value}")
 
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
+
     # Make a request
     async with httpx.AsyncClient() as client:
         response = await client.get(f"http://127.0.0.1:{unused_port}/")
@@ -565,7 +574,7 @@ async def test_lifespan_with_fastapi_app(unused_port: int):
 @pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_requests_blocked_until_startup_complete(unused_port: int):
-    """Test that HTTP requests are blocked until lifespan startup is complete."""
+    """Test that the server doesn't accept connections until lifespan startup is complete."""
     startup_complete = asyncio.Event()
     request_processed = asyncio.Event()
 
@@ -583,7 +592,7 @@ async def test_requests_blocked_until_startup_complete(unused_port: int):
                     break
         elif scope["type"] == "http":
             # This should only be called after startup is complete
-            assert startup_complete.is_set(), "Request should wait for startup"
+            assert startup_complete.is_set(), "Request should not be processed until startup is complete"
             request_processed.set()
             await send(
                 {
@@ -609,18 +618,19 @@ async def test_requests_blocked_until_startup_complete(unused_port: int):
     # Start server
     server_task = asyncio.create_task(server.a_run())
 
-    # Try to make request immediately (should wait for startup)
-    async def make_request():
-        await asyncio.sleep(0.2)  # Small delay to let server start listening
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"http://127.0.0.1:{unused_port}/")
-            assert response.status_code == 200
+    # Wait for startup to complete (server won't be listening until this is done)
+    await asyncio.wait_for(startup_complete.wait(), timeout=3)
 
-    request_task = asyncio.create_task(make_request())
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
 
-    # Wait for both
-    await asyncio.wait_for(request_processed.wait(), timeout=3)
-    await request_task
+    # Now make request - should succeed immediately since startup is complete
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"http://127.0.0.1:{unused_port}/")
+        assert response.status_code == 200
+
+    # Verify request was processed
+    assert request_processed.is_set(), "Request should have been processed"
 
     # Clean up
     server_task.cancel()

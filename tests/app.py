@@ -3,7 +3,9 @@ This it a test ASGI application used for testing purposes.
 """
 
 from contextlib import asynccontextmanager
+from typing import cast
 
+from asgiref.typing import ASGIApplication
 from fastapi import FastAPI, WebSocket
 
 lifespan_records = []
@@ -16,25 +18,28 @@ async def lifespan(app: FastAPI):
     lifespan_records.append("shutdown")
 
 
-app = FastAPI(lifespan=lifespan)
+_fastapi_app = FastAPI(lifespan=lifespan)
+
+# Cast FastAPI to ASGIApplication for type checking compatibility
+app: ASGIApplication = cast(ASGIApplication, _fastapi_app)
 
 
-@app.get("/helloworld")
+@_fastapi_app.get("/helloworld")
 def get_helloworld():
     return {"Hello": "World"}
 
 
-@app.post("/echo")
+@_fastapi_app.post("/echo")
 def post_echo(message: dict):
     return message
 
 
-@app.get("/read_params")
+@_fastapi_app.get("/read_params")
 def get_read_params(name: str, age: int, active: bool):
     return {"Name": name, "Age": age, "Active": active}
 
 
-@app.websocket("/ws")
+@_fastapi_app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     while True:
