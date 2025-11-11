@@ -172,7 +172,12 @@ class Server:
 
         match self.http_version:
             case HttpProtocolVersion.HTTP_1_1:
-                self.protocol_cls: type[HTTP11ServerProtocol] | type[Http2ServerProtocol] | type[AutoProtocol] | None = HTTP11ServerProtocol
+                self.protocol_cls: (
+                    type[HTTP11ServerProtocol]
+                    | type[Http2ServerProtocol]
+                    | type[AutoProtocol]
+                    | None
+                ) = HTTP11ServerProtocol
             case HttpProtocolVersion.HTTP_2:
                 self.protocol_cls = Http2ServerProtocol
             case HttpProtocolVersion.HTTP_3:

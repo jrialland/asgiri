@@ -281,7 +281,9 @@ class Http2ServerProtocol(asyncio.Protocol):
                 )
                 if self.conn and self.transport:
                     stream_state.sender = Sender(
-                        conn=self.conn, transport=self.transport, stream_id=event.stream_id
+                        conn=self.conn,
+                        transport=self.transport,
+                        stream_id=event.stream_id,
                     )
                 # Send initial empty body message to start the request
                 asyncio.create_task(
