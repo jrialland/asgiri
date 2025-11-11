@@ -158,6 +158,7 @@ class Server:
         lifespan: LifespanPolicy | None = None,
         enable_http3: bool = True,
         http3_port: int | None = None,
+        enable_webtransport: bool = False,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         # Ensure app is a single callable (ASGI 3.0) - call once at initialization
@@ -167,6 +168,7 @@ class Server:
         self.http_version = http_version or HttpProtocolVersion.AUTO
         self.enable_http3 = enable_http3
         self.http3_port = http3_port or port  # Default to same port as TCP
+        self.enable_webtransport = enable_webtransport
         self.certfile = certfile
         self.keyfile = keyfile
         self.cert_data = cert_data
@@ -338,6 +340,7 @@ class Server:
                 *args,
                 app=self.app,
                 server=(self.host or "127.0.0.1", self.http3_port),
+                enable_webtransport=self.enable_webtransport,
                 **kwargs,
             )
 
