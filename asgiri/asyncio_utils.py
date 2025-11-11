@@ -4,11 +4,10 @@ Asyncio utilities.
 
 import asyncio
 
-uvloop_ = None
+# Install uvloop if available (must be done before creating event loops)
 try:
     import uvloop  # type: ignore
-
-    uvloop_ = uvloop
+    uvloop.install()
 except ImportError:
     pass
 
@@ -18,9 +17,7 @@ def install_event_loop() -> asyncio.AbstractEventLoop:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         # no event loop, create one
-        if uvloop_:
-            loop = uvloop_.new_event_loop()
-        else:
-            loop = asyncio.new_event_loop()
+        # If uvloop was installed above, this will automatically use uvloop
+        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop
