@@ -2,10 +2,12 @@ import asyncio
 
 uvloop_ = None
 try:
-    import uvloop
-    unvloop_ = uvloop
+    import uvloop  # type: ignore
+
+    uvloop_ = uvloop
 except ImportError:
     pass
+
 
 def install_event_loop() -> asyncio.AbstractEventLoop:
     try:

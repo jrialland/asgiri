@@ -1,8 +1,48 @@
 # Commandline usage
 
-# Examples
+```
+usage: asgiri [-h] [--http11 | --http2 | --http3] [--host HOST] [--port PORT]
+              [--selfcert] [--cert CERT] [--key KEY] [--wsgi]
+              [--lifespan-policy {enabled,disabled,auto}]
+              [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+              application
 
-## Basic Usage
+ASGI HTTP server with HTTP/1.1, HTTP/2, and HTTP/3 support
+
+positional arguments:
+  application           ASGI application in format "module.path:attribute"     
+
+options:
+  -h, --help            show this help message and exit
+  --http11              Use only HTTP/1.1 protocol
+  --http2               Handle both HTTP/1.1 and HTTP/2 protocols (default)    
+  --http3               Use HTTP/3 (QUIC) protocol only - requires TLS
+                        certificates
+  --host HOST           Host to bind to (default: 127.0.0.1)
+  --port PORT           Port to bind to (default: 8000)
+  --selfcert            Generate and use a self-signed certificate for HTTPS   
+  --cert CERT           Path to SSL certificate file (PEM format)
+  --key KEY             Path to SSL private key file (PEM format)
+  --wsgi                Treat application as WSGI (will be wrapped with        
+                        asgiref.wsgi)
+  --lifespan-policy {enabled,disabled,auto}
+                        Lifespan event handling policy (default: auto)
+  --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
+                        Set logging level (default: INFO)
+
+Command-line interface for asgiri ASGI server.
+
+Usage:
+    python -m asgiri [options] mymodule:app
+    asgiri [options] mymodule:app
+
+Examples:
+    asgiri --http11 --host=0.0.0.0 --port=8000 mymodule:app
+    asgiri --http2 --port=8080 tests.app:app
+    asgiri --wsgi mymodule:wsgi_app
+```
+
+## Basic Examples
 
 Http 1.1 only
 ```bash
