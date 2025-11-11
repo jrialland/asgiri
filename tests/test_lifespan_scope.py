@@ -125,6 +125,9 @@ async def test_lifespan_shutdown_called(unused_port: int):
     except asyncio.TimeoutError:
         pytest.fail("Lifespan startup was not called within timeout")
 
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
+
     # Make a request to ensure server is working
     async with httpx.AsyncClient() as client:
         response = await client.get(f"http://127.0.0.1:{unused_port}/")
@@ -288,6 +291,9 @@ async def test_lifespan_state_shared_with_requests(unused_port: int):
         await asyncio.wait_for(startup_event.wait(), timeout=2)
     except asyncio.TimeoutError:
         pytest.fail("Startup not called")
+
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
 
     # Make request and check state
     async with httpx.AsyncClient() as client:
@@ -484,6 +490,9 @@ async def test_lifespan_works_with_all_protocols(
         await asyncio.wait_for(startup_event.wait(), timeout=2)
     except asyncio.TimeoutError:
         pytest.fail(f"Startup not called for {protocol_version.value}")
+
+    # Small delay to ensure server socket is ready to accept connections
+    await asyncio.sleep(0.2)
 
     # Make a request
     async with httpx.AsyncClient() as client:
