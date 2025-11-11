@@ -2,6 +2,9 @@
 
 A high-performance ASGI server implementation supporting HTTP/1.1, HTTP/2, and HTTP/3 protocols with automatic protocol detection and seamless switching.
 
+> **⚠️ Early Stage Project**  
+> Asgiri is a relatively new project and has not been extensively tested in production environments. While we strive for stability and correctness, we recommend thorough testing in your specific use case before deploying to production. Contributions, bug reports, and feedback are highly appreciated as we work toward production readiness.
+
 ## Lore
 
 Deep in the hills of Kandy, Sri Lanka, stands the [Asgiri Maha Viharaya](https://en.wikipedia.org/wiki/Asgiri_Maha_Viharaya) — a sacred monastery that has been a beacon of wisdom and preservation for centuries. As the headquarters of the Asgiriya Chapter of Siyam Nikaya, this ancient temple holds the solemn duty of safeguarding one of Buddhism's most precious relics: the sacred tooth relic of Buddha.
