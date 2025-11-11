@@ -18,8 +18,23 @@ from .app import app
 def unused_port():
     """Find an unused port for testing."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("", 0))
         return s.getsockname()[1]
+
+
+def wait_for_server(host: str, port: int, timeout: float = 5.0) -> bool:
+    """Wait for server to be ready to accept connections."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.5)
+                sock.connect((host, port))
+                return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.1)
+    return False
 
 
 @pytest.mark.parametrize(
@@ -38,14 +53,13 @@ async def test_get_helloworld_endpoint(
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Make a request to the /helloworld endpoint
     response = httpx.get(f"http://127.0.0.1:{unused_port}/helloworld")
     assert response.status_code == 200
     assert response.json() == {"Hello": "World"}
-    server_thread.join(0)
 
 
 @pytest.mark.parametrize(
@@ -64,8 +78,8 @@ async def test_post_echo_endpoint(
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Make a request to the /echo endpoint
     response = httpx.post(
@@ -73,7 +87,6 @@ async def test_post_echo_endpoint(
     )
     assert response.status_code == 200
     assert response.json() == {"message": "Hello, World!"}
-    server_thread.join(0)
 
 
 @pytest.mark.parametrize(
@@ -92,8 +105,8 @@ async def test_get_with_parameters(
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Make a request to the /helloworld endpoint
     response = httpx.get(
@@ -101,7 +114,6 @@ async def test_get_with_parameters(
     )
     assert response.status_code == 200
     assert response.json() == {"Name": "John", "Age": 30, "Active": True}
-    server_thread.join(0)
 
 
 # ============================================================================
@@ -124,11 +136,12 @@ async def test_http2_direct_connection(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Create a raw socket connection
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.connect(("127.0.0.1", unused_port))
 
     # Create HTTP/2 connection
@@ -186,8 +199,6 @@ async def test_http2_direct_connection(unused_port: int):
     assert b'"Hello"' in response_data
     assert b'"World"' in response_data
 
-    server_thread.join(0)
-
 
 @pytest.mark.timeout(5)
 @pytest.mark.asyncio
@@ -204,11 +215,12 @@ async def test_http2_post_request(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Create a raw socket connection
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.connect(("127.0.0.1", unused_port))
 
     # Create HTTP/2 connection
@@ -272,8 +284,6 @@ async def test_http2_post_request(unused_port: int):
     assert b'"test"' in response_data
     assert b'"data"' in response_data
 
-    server_thread.join(0)
-
 
 @pytest.mark.timeout(5)
 @pytest.mark.asyncio
@@ -290,11 +300,12 @@ async def test_http2_multiple_streams(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Create a raw socket connection
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.connect(("127.0.0.1", unused_port))
 
     # Create HTTP/2 connection
@@ -349,8 +360,6 @@ async def test_http2_multiple_streams(unused_port: int):
     assert response_count == 3
     assert len(streams_completed) == 3
 
-    server_thread.join(0)
-
 
 # ============================================================================
 # Protocol Switching Tests
@@ -372,11 +381,12 @@ async def test_protocol_detection_http11(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Create a raw socket and send HTTP/1.1 request
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(2.0)  # Set socket timeout
     sock.connect(("127.0.0.1", unused_port))
 
@@ -404,8 +414,6 @@ async def test_protocol_detection_http11(unused_port: int):
     assert b'"Hello"' in response
     assert b'"World"' in response
 
-    server_thread.join(0)
-
 
 @pytest.mark.timeout(5)
 @pytest.mark.asyncio
@@ -422,11 +430,12 @@ async def test_protocol_detection_http2(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # Create a raw socket and send HTTP/2 preface
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(2.0)  # Set socket timeout
     sock.connect(("127.0.0.1", unused_port))
 
@@ -449,7 +458,6 @@ async def test_protocol_detection_http2(unused_port: int):
     assert settings_received, "Server should respond with HTTP/2 settings"
 
     sock.close()
-    server_thread.join(0)
 
 
 @pytest.mark.timeout(5)
@@ -467,11 +475,12 @@ async def test_sequential_http11_and_http2_connections(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # First, make an HTTP/1.1 request
     sock1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock1.settimeout(2.0)  # Set socket timeout
     sock1.connect(("127.0.0.1", unused_port))
     request = (
@@ -494,6 +503,7 @@ async def test_sequential_http11_and_http2_connections(unused_port: int):
 
     # Then, make an HTTP/2 request
     sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock2.settimeout(2.0)  # Set socket timeout
     sock2.connect(("127.0.0.1", unused_port))
 
@@ -543,8 +553,6 @@ async def test_sequential_http11_and_http2_connections(unused_port: int):
     assert b'"Hello"' in response_data
     assert b'"World"' in response_data
 
-    server_thread.join(0)
-
 
 @pytest.mark.timeout(5)
 @pytest.mark.asyncio
@@ -561,8 +569,8 @@ async def test_http2_with_httpx_client(unused_port: int):
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    # Give the server a moment to start
-    time.sleep(0.5)
+    # Wait for server to be ready
+    assert wait_for_server("127.0.0.1", unused_port), "Server failed to start"
 
     # httpx requires HTTP/2 over TLS in most cases, so this test uses raw h2
     # But we can test that the endpoint works
@@ -575,5 +583,3 @@ async def test_http2_with_httpx_client(unused_port: int):
         except Exception:
             # If httpx doesn't support plain HTTP/2, that's expected
             pass
-
-    server_thread.join(0)

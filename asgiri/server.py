@@ -245,6 +245,7 @@ class Server:
                     self.host,
                     self.port,
                     ssl=self.ssl_context,
+                    reuse_address=True,
                     start_serving=True,
                 )
 

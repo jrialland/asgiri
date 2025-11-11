@@ -21,8 +21,23 @@ from .app import app
 def unused_port():
     """Find an unused port for testing."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("", 0))
         return s.getsockname()[1]
+
+
+def wait_for_server(host: str, port: int, timeout: float = 5.0) -> bool:
+    """Wait for server to be ready to accept connections."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.5)
+                sock.connect((host, port))
+                return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.1)
+    return False
 
 
 @pytest.fixture
@@ -41,16 +56,14 @@ def server_factory():
         threads.append(server_thread)
         server_thread.start()
 
-        # Give server time to start
-        time.sleep(0.5)
+        # Wait for server to be ready
+        assert wait_for_server("127.0.0.1", port), f"Server failed to start on port {port}"
 
         return server
 
     yield _create_server
 
-    # Cleanup
-    for thread in threads:
-        thread.join(0)
+    # Cleanup - threads are daemon so they'll exit with the test process
 
 
 # ============================================================================
@@ -276,10 +289,12 @@ async def test_websocket_protocol_comparison():
 
     # Get two different unused ports
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s1:
+        s1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s1.bind(("", 0))
         port1 = s1.getsockname()[1]
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
+        s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s2.bind(("", 0))
         port2 = s2.getsockname()[1]
 
@@ -289,7 +304,7 @@ async def test_websocket_protocol_comparison():
     )
     thread1 = threading.Thread(target=server1.run, daemon=True)
     thread1.start()
-    time.sleep(0.5)
+    assert wait_for_server("127.0.0.1", port1), "Server 1 failed to start"
 
     uri1 = f"ws://127.0.0.1:{port1}/ws"
     async with connect(uri1) as websocket:
@@ -302,7 +317,7 @@ async def test_websocket_protocol_comparison():
     )
     thread2 = threading.Thread(target=server2.run, daemon=True)
     thread2.start()
-    time.sleep(0.5)
+    assert wait_for_server("127.0.0.1", port2), "Server 2 failed to start"
 
     uri2 = f"ws://127.0.0.1:{port2}/ws"
     async with connect(uri2) as websocket:
