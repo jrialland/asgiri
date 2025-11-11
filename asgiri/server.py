@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 
 from asgiref.typing import ASGIApplication
+from asgiref.compatibility import guarantee_single_callable
 
 from .proto.auto import AutoProtocol
 from .proto.http2 import Http2ServerProtocol
@@ -159,7 +160,8 @@ class Server:
         http3_port: int | None = None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.app = app
+        # Ensure app is a single callable (ASGI 3.0) - call once at initialization
+        self.app = guarantee_single_callable(app)
         self.host = host
         self.port = port
         self.http_version = http_version or HttpProtocolVersion.AUTO

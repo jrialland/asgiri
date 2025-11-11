@@ -15,8 +15,8 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h3.connection import H3Connection
 from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
 from aioquic.quic.events import QuicEvent
-from asgiref.typing import (ASGIApplication, ASGIReceiveCallable,
-                            ASGISendCallable, HTTPScope)
+from asgiref.typing import (ASGI3Application, ASGIApplication,
+                            ASGIReceiveCallable, ASGISendCallable, HTTPScope)
 
 logger = logging.getLogger(__name__)
 
@@ -178,10 +178,8 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         sender = self._create_sender(stream_id)
 
         try:
-            # Use asgiref's handy wrapper for ASGI 2.0 apps
-            from asgiref.compatibility import guarantee_single_callable
-
-            app = guarantee_single_callable(self.app)
+            # App is already guaranteed to be single callable by server.py
+            app = cast(ASGI3Application, self.app)
             await app(scope, receiver, sender)
         except Exception as e:
             self.logger.exception(f"Error in ASGI app for stream {stream_id}: {e}")
@@ -196,7 +194,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             self.stream_receivers.pop(stream_id, None)
             self.stream_ended.pop(stream_id, None)
 
-    def _create_receiver(self, stream_id: int) -> Callable[[], Any]:
+    def _create_receiver(self, stream_id: int) -> ASGIReceiveCallable:
         """
         Create ASGI receive callable for this stream.
 
@@ -258,9 +256,9 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
                     # Keep waiting
                     return await receive()
 
-        return receive
+        return cast(ASGIReceiveCallable, receive)
 
-    def _create_sender(self, stream_id: int) -> Callable[[dict[str, Any]], Any]:
+    def _create_sender(self, stream_id: int) -> ASGISendCallable:
         """
         Create ASGI send callable for this stream.
 
@@ -317,7 +315,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
                 # Transmit to QUIC
                 self.transmit()
 
-        return send
+        return cast(ASGISendCallable, send)
 
     def _send_error_response(self, stream_id: int, status_code: int) -> None:
         """
