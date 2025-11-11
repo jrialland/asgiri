@@ -1,0 +1,35 @@
+[project]
+name = "asgiri"
+version = "0.1.0"
+description = "Yet another ASGI server implementation."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "asgiref>=3.10.0",
+    "cryptography>=46.0.3",
+    "h11>=0.16.0",
+    "h2>=4.3.0",
+    "loguru>=0.7.3",
+    "rfc3986>=2.0.0",
+    "wsproto>=1.2.0",
+]
+
+[project.scripts]
+asgiri = "asgiri.__main__:main"
+
+[dependency-groups]
+dev = [
+    "black>=25.9.0",
+    "fastapi>=0.120.4",
+    "httpx>=0.28.1",
+    "isort>=7.0.0",
+    "mypy>=1.18.2",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-timeout>=2.4.0",
+    "websockets>=15.0.1",
+]
+
+[[tool.mypy.overrides]]
+module = ["asgiri.*"]
+ignore_missing_imports = true
