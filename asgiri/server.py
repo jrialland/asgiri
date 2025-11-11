@@ -14,7 +14,7 @@ from .proto.http2 import Http2ServerProtocol
 from .proto.http11 import HTTP11ServerProtocol
 from .ssl_utils import create_ssl_context
 from .asyncio_utils import install_event_loop
-
+from .extensions.tls import TLSExtensionMiddleware
 
 class HttpProtocolVersion(Enum):
     HTTP_1_1 = "http/1.1"
@@ -202,6 +202,7 @@ class Server:
                 cert_data=cert_data,
                 key_data=key_data,
             )
+            self.app = TLSExtensionMiddleware(self.app, ssl_context = self.ssl_context)
             self.logger.info("SSL context created successfully")
 
     def run(self):
