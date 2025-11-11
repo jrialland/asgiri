@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 import ssl
 from enum import Enum
 from pathlib import Path
@@ -80,5 +81,19 @@ class Server:
         addr = server.sockets[0].getsockname()
         scheme = "https" if self.ssl_context else "http"
         self.logger.info(f"Serving on {scheme}://{addr[0]}:{addr[1]}")
+        
+        # Setup signal handlers for graceful shutdown
+        shutdown_event = asyncio.Event()
+        
+        def signal_handler(sig, frame):
+            self.logger.info(f"Received signal {sig}, shutting down...")
+            shutdown_event.set()
+        
+        # Register signal handlers (works on both Unix and Windows)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
         async with server:
-            await server.serve_forever()
+            # Wait for shutdown signal
+            await shutdown_event.wait()
+            self.logger.info("Server shutdown complete")
