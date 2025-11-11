@@ -6,7 +6,9 @@ import h11
 import rfc3986  # type: ignore
 from asgiref.typing import (ASGIApplication, HTTPResponseBodyEvent,
                             HTTPResponseStartEvent, HTTPResponseTrailersEvent,
-                            HTTPScope)
+                            HTTPScope, WebSocketScope)
+
+from .websocket import WebSocketProtocol
 
 
 class Sender:
@@ -130,6 +132,15 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             else:
                 # Handle other events (e.g., Request, Data, EndOfMessage)
                 if isinstance(event, h11.Request):
+                    # Check if this is a WebSocket upgrade request
+                    is_websocket = self._is_websocket_upgrade(event)
+                    
+                    if is_websocket:
+                        # Handle WebSocket upgrade
+                        self.logger.info(f"WebSocket upgrade: {event.target.decode()}")
+                        self._handle_websocket_upgrade(event)
+                        return
+                    
                     # Create a new queue for this request
                     self.receive_body_queue = asyncio.Queue()
                     url: rfc3986.ParseResult = rfc3986.urlparse(event.target.decode())
@@ -194,5 +205,89 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         except Exception as e:
             self.logger.exception(f"Error handling request")
         finally:
-            # After response is sent, reset h11 connection state
-            self.conn.start_next_cycle()
+            # After response is sent, reset h11 connection state if possible
+            # Only call start_next_cycle if the connection is in a reusable state
+            if self.conn.our_state == h11.DONE and self.conn.their_state == h11.DONE:
+                self.conn.start_next_cycle()
+            elif self.conn.our_state == h11.MUST_CLOSE or self.conn.their_state == h11.MUST_CLOSE:
+                # Connection must close, don't try to reuse it
+                if self.transport:
+                    self.transport.close()
+
+    def _is_websocket_upgrade(self, request: h11.Request) -> bool:
+        """Check if a request is a WebSocket upgrade request.
+        
+        Args:
+            request: The h11 Request event.
+            
+        Returns:
+            True if this is a WebSocket upgrade request.
+        """
+        headers_dict = {name.lower(): value for name, value in request.headers}
+        
+        # Check for required WebSocket headers
+        upgrade = headers_dict.get(b"upgrade", b"").lower()
+        connection = headers_dict.get(b"connection", b"").lower()
+        ws_version = headers_dict.get(b"sec-websocket-version", b"")
+        ws_key = headers_dict.get(b"sec-websocket-key", b"")
+        
+        return (
+            upgrade == b"websocket" and
+            b"upgrade" in connection and
+            ws_version == b"13" and
+            len(ws_key) > 0
+        )
+
+    def _handle_websocket_upgrade(self, request: h11.Request):
+        """Handle a WebSocket upgrade request.
+        
+        Args:
+            request: The h11 Request event.
+        """
+        assert self.transport is not None
+        assert self.conn is not None
+        
+        # Create WebSocket scope first (before we send any response)
+        url: rfc3986.ParseResult = rfc3986.urlparse(request.target.decode())
+        
+        # Extract headers
+        headers_dict = {name.lower(): value for name, value in request.headers}
+        
+        # Extract subprotocols if present
+        subprotocols = []
+        ws_protocol = headers_dict.get(b"sec-websocket-protocol")
+        if ws_protocol:
+            subprotocols = [p.strip().decode() for p in ws_protocol.split(b",")]
+        
+        scope: WebSocketScope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": request.http_version.decode(),
+            "scheme": "wss" if self.ssl else "ws",
+            "path": url.path or "/",
+            "raw_path": request.target,
+            "query_string": url.query.encode() if url.query else b"",
+            "root_path": "",
+            "headers": request.headers,
+            "client": self.client,
+            "server": self.server,
+            "subprotocols": subprotocols,
+            "state": self.state,
+            "extensions": {"websocket.http.response": {}},
+        }
+        
+        # Build the raw HTTP request for wsproto
+        # wsproto needs to see the full HTTP request to complete its handshake
+        request_line = f"{request.method.decode()} {request.target.decode()} HTTP/{request.http_version.decode()}\r\n".encode()
+        headers_bytes = b"".join([f"{name.decode()}: {value.decode()}\r\n".encode() for name, value in request.headers])
+        raw_request = request_line + headers_bytes + b"\r\n"
+        
+        # Create WebSocket protocol handler - this will handle the handshake
+        ws_protocol = WebSocketProtocol(self.transport, scope, self.app, raw_request)
+        
+        # Replace data handler with WebSocket handler
+        self.data_received = ws_protocol.data_received  # type: ignore
+        self.connection_lost = ws_protocol.connection_lost  # type: ignore
+        
+        # Start WebSocket handling
+        asyncio.create_task(ws_protocol.handle())

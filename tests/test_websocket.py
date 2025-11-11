@@ -2,37 +2,17 @@
 WebSocket tests for asgiri server.
 
 Tests WebSocket functionality over both HTTP/1.1 and HTTP/2 protocols.
-
-NOTE: These tests are currently FAILING because WebSocket support is not yet 
-implemented in the asgiri server protocol handlers (http11.py, http2.py, auto.py).
-
-To make these tests pass, WebSocket support needs to be added:
-1. Detect WebSocket upgrade requests (check for Upgrade: websocket header)
-2. Perform WebSocket handshake (RFC 6455)
-3. Switch to WebSocket framing protocol
-4. Handle WebSocket frames (text, binary, close, ping, pong)
-5. Integrate with wsproto library (already in dependencies)
-
-The tests below are comprehensive and ready to validate WebSocket functionality
-once it's implemented in the server.
 """
 import pytest
 import asyncio
 import threading
 import time
 import socket
-from websockets.client import connect
-from websockets.exceptions import ConnectionClosed
+from websockets.asyncio.client import connect
 
 from .app import app
 from asgiri.server import HttpProtocolVersion, Server
 
-
-# Mark all tests in this module as expected to fail until WebSocket support is added
-pytestmark = pytest.mark.xfail(
-    reason="WebSocket support not yet implemented in asgiri server protocols",
-    strict=False
-)
 
 
 @pytest.fixture(scope="function")
@@ -284,48 +264,50 @@ async def test_websocket_concurrent_connections_http2(unused_port: int, server_f
 
 @pytest.mark.timeout(10)
 @pytest.mark.asyncio
-async def test_websocket_protocol_comparison(unused_port: int):
+async def test_websocket_protocol_comparison():
     """Compare WebSocket behavior between HTTP/1.1 and AUTO modes."""
     test_message = "Protocol test message"
+    
+    # Get two different unused ports
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s1:
+        s1.bind(("", 0))
+        port1 = s1.getsockname()[1]
+    
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
+        s2.bind(("", 0))
+        port2 = s2.getsockname()[1]
     
     # Test with HTTP/1.1
     server1 = Server(
         app=app,
         host="127.0.0.1",
-        port=unused_port,
+        port=port1,
         http_version=HttpProtocolVersion.HTTP_1_1
     )
     thread1 = threading.Thread(target=server1.run, daemon=True)
     thread1.start()
     time.sleep(0.5)
     
-    uri1 = f"ws://127.0.0.1:{unused_port}/ws"
+    uri1 = f"ws://127.0.0.1:{port1}/ws"
     async with connect(uri1) as websocket:
         await websocket.send(test_message)
         response1 = await websocket.recv()
-    
-    thread1.join(0)
-    
-    # Brief pause between servers
-    time.sleep(0.5)
     
     # Test with AUTO (HTTP/2 capable)
     server2 = Server(
         app=app,
         host="127.0.0.1",
-        port=unused_port,
+        port=port2,
         http_version=HttpProtocolVersion.AUTO
     )
     thread2 = threading.Thread(target=server2.run, daemon=True)
     thread2.start()
     time.sleep(0.5)
     
-    uri2 = f"ws://127.0.0.1:{unused_port}/ws"
+    uri2 = f"ws://127.0.0.1:{port2}/ws"
     async with connect(uri2) as websocket:
         await websocket.send(test_message)
         response2 = await websocket.recv()
-    
-    thread2.join(0)
     
     # Both should produce the same result
     assert response1 == response2

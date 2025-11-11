@@ -11,8 +11,10 @@ from asgiref.typing import (
     HTTPResponseStartEvent,
     HTTPResponseTrailersEvent,
     HTTPScope,
+    WebSocketScope,
 )
 from ..exceptions import ConnectionAbortedError
+from .websocket import WebSocketProtocol
 
 
 class Receiver:
@@ -157,6 +159,14 @@ class Http2ServerProtocol(asyncio.Protocol):
 
         for event in events:
             if isinstance(event, h2.events.RequestReceived):
+                # Check if this is a WebSocket CONNECT request (RFC 8441)
+                is_websocket = self._is_websocket_connect(event)
+                
+                if is_websocket:
+                    # Handle WebSocket CONNECT
+                    self._handle_websocket_connect(event)
+                    continue
+                
                 scope = self._build_scope(event)
                 stream_state = self.stream_states[event.stream_id] = StreamState(
                     event.stream_id
@@ -184,15 +194,21 @@ class Http2ServerProtocol(asyncio.Protocol):
                     )
                     self._write_to_transport()
 
-                    asyncio.create_task(
-                        stream_state.receiver.messages.put(
-                            {
-                                "type": "http.request",
-                                "body": event.data,
-                                "more_body": True,
-                            }
+                    # Check if this is a WebSocket stream
+                    if hasattr(stream_state, "ws_protocol"):
+                        # Pass data to WebSocket handler
+                        stream_state.ws_protocol.data_received(event.data)  # type: ignore
+                    else:
+                        # Regular HTTP/2 data
+                        asyncio.create_task(
+                            stream_state.receiver.messages.put(
+                                {
+                                    "type": "http.request",
+                                    "body": event.data,
+                                    "more_body": True,
+                                }
+                            )
                         )
-                    )
             elif isinstance(event, h2.events.StreamEnded):
                 stream_state = self.stream_states.get(event.stream_id)
                 if stream_state:
@@ -278,3 +294,155 @@ class Http2ServerProtocol(asyncio.Protocol):
         finally:
             # Clean up stream state after request is handled
             self.stream_states.pop(event.stream_id, None)
+
+    def _is_websocket_connect(self, event: h2.events.RequestReceived) -> bool:
+        """Check if this is a WebSocket CONNECT request (RFC 8441).
+        
+        Args:
+            event: The RequestReceived event.
+            
+        Returns:
+            True if this is a WebSocket CONNECT request.
+        """
+        headers_dict = {name: value for name, value in event.headers}
+        
+        # Check for CONNECT method with :protocol = websocket
+        method = headers_dict.get(b":method", b"")
+        protocol = headers_dict.get(b":protocol", b"")
+        
+        return method == b"CONNECT" and protocol == b"websocket"
+
+    def _handle_websocket_connect(self, event: h2.events.RequestReceived):
+        """Handle a WebSocket CONNECT request (RFC 8441).
+        
+        Args:
+            event: The RequestReceived event.
+        """
+        assert self.transport is not None
+        
+        # Extract headers
+        headers_dict = {name: value for name, value in event.headers}
+        raw_path = headers_dict.get(b":path", b"/")
+        scheme = headers_dict.get(b":scheme", b"https").decode()
+        authority = headers_dict.get(b":authority", b"")
+        
+        # Regular headers (non-pseudo)
+        headers = [(name, value) for name, value in event.headers 
+                   if not name.startswith(b":")]
+        
+        # Extract subprotocols if present
+        subprotocols = []
+        ws_protocol = headers_dict.get(b"sec-websocket-protocol")
+        if ws_protocol:
+            subprotocols = [p.strip().decode() for p in ws_protocol.split(b",")]
+        
+        # Parse URL
+        url: rfc3986.ParseResult = rfc3986.urlparse(raw_path.decode())
+        
+        # Create WebSocket scope
+        scope: WebSocketScope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "2",
+            "scheme": "wss" if scheme == "https" else "ws",
+            "path": url.path or "/",
+            "raw_path": raw_path,
+            "query_string": url.query.encode() if url.query else b"",
+            "root_path": "",
+            "headers": headers,
+            "client": self.client,
+            "server": self.server,
+            "subprotocols": subprotocols,
+            "state": self.state,
+            "extensions": {"websocket.http.response": {}},
+        }
+        
+        # Send 200 response to accept the CONNECT
+        self.conn.send_headers(
+            stream_id=event.stream_id,
+            headers=[(b":status", b"200")],
+        )
+        self._write_to_transport()
+        
+        # Create a custom transport wrapper for this stream
+        stream_transport = HTTP2StreamTransport(
+            self.conn, self.transport, event.stream_id, self
+        )
+        
+        # Create WebSocket protocol handler
+        ws_protocol = WebSocketProtocol(stream_transport, scope, self.app)
+        
+        # Store stream as WebSocket
+        self.stream_states[event.stream_id] = StreamState(event.stream_id)
+        self.stream_states[event.stream_id].ws_protocol = ws_protocol  # type: ignore
+        
+        # Start WebSocket handling
+        asyncio.create_task(ws_protocol.handle())
+
+
+class HTTP2StreamTransport:
+    """Transport wrapper for HTTP/2 streams to work with WebSocket protocol.
+    
+    This provides a transport-like interface for a single HTTP/2 stream,
+    allowing the WebSocket protocol handler to send data through the stream.
+    """
+    
+    def __init__(
+        self,
+        conn: h2.connection.H2Connection,
+        transport: asyncio.Transport,
+        stream_id: int,
+        protocol: "Http2ServerProtocol",
+    ):
+        """Initialize the stream transport.
+        
+        Args:
+            conn: The h2 connection.
+            transport: The underlying transport.
+            stream_id: The stream ID.
+            protocol: The HTTP/2 protocol instance.
+        """
+        self.conn = conn
+        self.transport = transport
+        self.stream_id = stream_id
+        self.protocol = protocol
+        self.closed = False
+
+    def write(self, data: bytes):
+        """Write data to the stream.
+        
+        Args:
+            data: The data to write.
+        """
+        if self.closed:
+            return
+        
+        # Send data through HTTP/2 stream
+        self.conn.send_data(self.stream_id, data)
+        self.protocol._write_to_transport()
+
+    def close(self):
+        """Close the stream."""
+        if self.closed:
+            return
+        
+        self.closed = True
+        
+        # End the stream
+        self.conn.end_stream(self.stream_id)
+        self.protocol._write_to_transport()
+        
+        # Clean up stream state
+        self.protocol.stream_states.pop(self.stream_id, None)
+
+    def get_extra_info(self, name: str, default=None):
+        """Get extra info from the underlying transport.
+        
+        Args:
+            name: The info name.
+            default: The default value if not found.
+            
+        Returns:
+            The info value.
+        """
+        return self.transport.get_extra_info(name, default)
