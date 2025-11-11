@@ -1,3 +1,5 @@
+"""HTTP/2 protocol implementation for ASGIRI server."""
+
 import asyncio
 import logging
 from typing import Any, override

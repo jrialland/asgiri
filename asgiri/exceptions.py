@@ -1,3 +1,5 @@
+"""Exceptions for Asgiri server."""
+
 class AsgiriException(Exception):
     """Base exception for Asgiri-related errors."""
 

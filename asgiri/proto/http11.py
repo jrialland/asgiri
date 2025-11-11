@@ -1,10 +1,9 @@
+"""HTTP/1.1 protocol implementation for ASGIRI server."""
 import asyncio
 import base64
 import logging
 from typing import Any, override
 
-import h2.config
-import h2.connection
 import h11
 import rfc3986  # type: ignore
 from asgiref.typing import (ASGIApplication, HTTPResponseBodyEvent,

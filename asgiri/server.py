@@ -1,3 +1,5 @@
+"""ASGIRI server implementation."""
+
 import asyncio
 import logging
 import signal
@@ -11,7 +13,7 @@ from .proto.auto import AutoProtocol
 from .proto.http2 import Http2ServerProtocol
 from .proto.http11 import HTTP11ServerProtocol
 from .ssl_utils import create_ssl_context
-from .util import install_event_loop
+from .asyncio_utils import install_event_loop
 
 
 class HttpProtocolVersion(Enum):
@@ -25,7 +27,6 @@ class LifespanPolicy(Enum):
     ENABLED = "enabled"
     DISABLED = "disabled"
     AUTO = "auto"
-
 
 class LifespanHandler:
 
