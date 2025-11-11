@@ -2,8 +2,19 @@
 This it a test ASGI application used for testing purposes.
 """
 from fastapi import FastAPI, WebSocket
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+
+
+lifespan_records = []
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    lifespan_records.append("startup")
+    yield
+    lifespan_records.append("shutdown")
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/helloworld")
 def get_helloworld():

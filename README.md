@@ -2,6 +2,22 @@
 
 A high-performance ASGI server implementation supporting both HTTP/1.1 and HTTP/2 protocols with automatic protocol detection.
 
+## Lore
+
+Deep in the hills of Kandy, Sri Lanka, stands the [Asgiri Maha Viharaya](https://en.wikipedia.org/wiki/Asgiri_Maha_Viharaya) — a sacred monastery that has been a beacon of wisdom and preservation for centuries. As the headquarters of the Asgiriya Chapter of Siyam Nikaya, this ancient temple holds the solemn duty of safeguarding one of Buddhism's most precious relics: the sacred tooth relic of Buddha.
+
+Just as the monastery has faithfully served countless pilgrims across the ages, handling their requests with grace and precision, so too does this server aim to serve your web traffic. Like the monks who maintain both ancient traditions (the sacred tooth relic) and adapt to modern times, Asgiri the server bridges the old (HTTP/1.1) and the new (HTTP/2, QUIC), automatically detecting which protocol each client speaks and responding with wisdom.
+
+The name `asgiri` reminds us that good software, like good monasteries, should be:
+- **Reliable** — Standing strong through the centuries
+- **Adaptable** — Serving all who come, regardless of their background
+- **Efficient** — Handling many requests with minimal resources
+- **Graceful** — Switching protocols as smoothly as monks switch between prayer and teaching
+
+May your servers run as peacefully as the chants in Asgiri's halls. 🙏
+
+
+
 ## Features
 
 - **Multi-Protocol Support**: Handles both HTTP/1.1 and HTTP/2 on the same port
@@ -66,7 +82,7 @@ The server uses a smart protocol detection mechanism:
 2. **HTTP/1.1 Fallback**: Falls back to HTTP/1.1 for standard HTTP requests
 3. **Advertisement**: Automatically adds `Alt-Svc` headers to HTTP/1.1 responses to advertise HTTP/2 capability
 
-See [PROTOCOL_SWITCHING.md](PROTOCOL_SWITCHING.md) for detailed information about protocol negotiation.
+For more details, see the [Protocol Switching Guide](docs/PROTOCOL_SWITCHING.md).
 
 ## Testing
 
@@ -78,23 +94,15 @@ curl -v http://localhost:8000/
 curl --http2-prior-knowledge http://localhost:8000/
 ```
 
-## Examples
-
-See `example_auto_protocol.py` for a complete example demonstrating auto-protocol switching.
-
 ## Documentation
 
-- [Protocol Switching Guide](PROTOCOL_SWITCHING.md) - Detailed guide on HTTP/2 negotiation and auto-detection
-- [Simple Example](simple_main.py) - Basic usage example
-- [Auto Protocol Example](example_auto_protocol.py) - Multi-protocol demonstration
+Want to learn more? Browse our documentation:
 
-## Requirements
-
-- Python 3.10+
-- h11 (HTTP/1.1 support)
-- h2 (HTTP/2 support)
-- asgiref (ASGI typing)
-- rfc3986 (URL parsing)
+- **[Quick Reference](docs/QUICK_REFERENCE.md)** — Essential commands and usage patterns at a glance
+- **[CLI Guide](docs/CLI.md)** — Command-line interface options and examples
+- **[Protocol Switching](docs/PROTOCOL_SWITCHING.md)** — Deep dive into HTTP/2 negotiation and auto-detection
+- **[Architecture](docs/ARCHITECTURE.md)** — Internal design and implementation details
+- **[WebSocket Implementation](WEBSOCKET_IMPLEMENTATION.md)** — WebSocket protocol support and usage
 
 ## License
 
