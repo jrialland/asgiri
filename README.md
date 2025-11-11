@@ -1,12 +1,12 @@
 # Asgiri
 
-A high-performance ASGI server implementation supporting both HTTP/1.1 and HTTP/2 protocols with automatic protocol detection.
+A high-performance ASGI server implementation supporting HTTP/1.1, HTTP/2, and HTTP/3 protocols with automatic protocol detection and seamless switching.
 
 ## Lore
 
 Deep in the hills of Kandy, Sri Lanka, stands the [Asgiri Maha Viharaya](https://en.wikipedia.org/wiki/Asgiri_Maha_Viharaya) — a sacred monastery that has been a beacon of wisdom and preservation for centuries. As the headquarters of the Asgiriya Chapter of Siyam Nikaya, this ancient temple holds the solemn duty of safeguarding one of Buddhism's most precious relics: the sacred tooth relic of Buddha.
 
-Just as the monastery has faithfully served countless pilgrims across the ages, handling their requests with grace and precision, so too does this server aim to serve your web traffic. Like the monks who maintain both ancient traditions (the sacred tooth relic) and adapt to modern times, Asgiri the server bridges the old (HTTP/1.1) and the new (HTTP/2, QUIC), automatically detecting which protocol each client speaks and responding with wisdom.
+Just as the monastery has faithfully served countless pilgrims across the ages, handling their requests with grace and precision, so too does this server aim to serve your web traffic. Like the monks who maintain both ancient traditions (the sacred tooth relic) and adapt to modern times, Asgiri the server bridges the old (HTTP/1.1), the new (HTTP/2), and the cutting edge (HTTP/3), automatically detecting which protocol each client speaks and responding with wisdom.
 
 The name `asgiri` reminds us that good software, like good monasteries, should be:
 - **Reliable** — Standing strong through the centuries
@@ -20,9 +20,12 @@ May your servers run as peacefully as the chants in Asgiri's halls. 🙏
 
 ## Features
 
-- **Multi-Protocol Support**: Handles both HTTP/1.1 and HTTP/2 on the same port
+- **Multi-Protocol Support**: Handles HTTP/1.1, HTTP/2, and HTTP/3 on the same port
+- **HTTP/3 (QUIC)**: Modern UDP-based protocol for improved performance over lossy networks
 - **Auto-Detection**: Automatically detects client protocol preference
-- **Protocol Advertisement**: Advertises HTTP/2 capability via Alt-Svc headers
+- **Dual Transport**: Runs TCP and UDP servers simultaneously for comprehensive protocol coverage
+- **Protocol Advertisement**: Advertises HTTP/2 and HTTP/3 capability via Alt-Svc headers
+- **WebSocket Support**: WebSocket protocol over HTTP/1.1 and HTTP/2
 - **ASGI 3.0 Compatible**: Works with any ASGI 3.0 application
 - **Async/Await**: Built on Python's asyncio for high concurrency
 
@@ -50,11 +53,11 @@ server.run()
 
 ### Auto-Detection (Default)
 
-By default, the server automatically detects whether the client is using HTTP/1.1 or HTTP/2:
+By default, the server automatically detects whether the client is using HTTP/1.1, HTTP/2, or HTTP/3:
 
 ```python
-server = Server(app=app, host="127.0.0.1", port=8000)
-# Automatically handles both HTTP/1.1 and HTTP/2
+server = Server(app=app, host="127.0.0.1", port=8443, certfile="cert.pem", keyfile="key.pem")
+# Automatically handles HTTP/1.1, HTTP/2 (TCP), and HTTP/3 (UDP)
 ```
 
 ### Explicit Protocol Selection
@@ -70,19 +73,60 @@ server = Server(app=app, http_version=HttpProtocolVersion.HTTP_1_1)
 # HTTP/2 only
 server = Server(app=app, http_version=HttpProtocolVersion.HTTP_2)
 
+# HTTP/3 only (requires TLS)
+server = Server(
+    app=app, 
+    http_version=HttpProtocolVersion.HTTP_3,
+    certfile="cert.pem",
+    keyfile="key.pem"
+)
+
 # Auto-detection (explicit)
 server = Server(app=app, http_version=HttpProtocolVersion.AUTO)
 ```
 
+### HTTP/3 Configuration
+
+HTTP/3 requires TLS certificates:
+
+```python
+from asgiri.server import Server
+
+server = Server(
+    app=app,
+    host="0.0.0.0",
+    port=8443,
+    certfile="cert.pem",
+    keyfile="key.pem",
+    enable_http3=True,  # Enable HTTP/3 (default: True)
+)
+```
+
+For development, generate self-signed certificates:
+
+```bash
+python generate_cert.py
+```
+
 ## How It Works
 
-The server uses a smart protocol detection mechanism:
+The server uses a smart dual-transport architecture with protocol detection:
+
+### TCP Server (HTTP/1.1 and HTTP/2)
 
 1. **HTTP/2 Prior Knowledge**: Detects the HTTP/2 connection preface (`PRI * HTTP/2.0...`)
 2. **HTTP/1.1 Fallback**: Falls back to HTTP/1.1 for standard HTTP requests
-3. **Advertisement**: Automatically adds `Alt-Svc` headers to HTTP/1.1 responses to advertise HTTP/2 capability
+3. **Advertisement**: Automatically adds `Alt-Svc` headers to advertise HTTP/2 and HTTP/3 capability
 
-For more details, see the [Protocol Switching Guide](docs/PROTOCOL_SWITCHING.md).
+### UDP Server (HTTP/3)
+
+1. **QUIC Protocol**: Handles HTTP/3 over QUIC (UDP-based transport)
+2. **TLS Integration**: Built-in TLS 1.3 encryption (mandatory for HTTP/3)
+3. **Multiplexing**: True stream independence without head-of-line blocking
+
+For more details, see:
+- [Protocol Switching Guide](docs/PROTOCOL_SWITCHING.md)
+- [HTTP/3 Implementation](docs/HTTP3_IMPLEMENTATION.md)
 
 ## Testing
 
@@ -92,6 +136,9 @@ curl -v http://localhost:8000/
 
 # Test HTTP/2 (with prior knowledge)
 curl --http2-prior-knowledge http://localhost:8000/
+
+# Test HTTP/3 (requires curl with HTTP/3 support)
+curl --http3 https://localhost:8443/ -k
 ```
 
 ## Documentation
@@ -101,6 +148,7 @@ Want to learn more? Browse our documentation:
 - **[Quick Reference](docs/QUICK_REFERENCE.md)** — Essential commands and usage patterns at a glance
 - **[CLI Guide](docs/CLI.md)** — Command-line interface options and examples
 - **[Protocol Switching](docs/PROTOCOL_SWITCHING.md)** — Deep dive into HTTP/2 negotiation and auto-detection
+- **[HTTP/3 Implementation](docs/HTTP3_IMPLEMENTATION.md)** — Complete guide to HTTP/3 support and configuration
 - **[Architecture](docs/ARCHITECTURE.md)** — Internal design and implementation details
 - **[WebSocket Implementation](WEBSOCKET_IMPLEMENTATION.md)** — WebSocket protocol support and usage
 

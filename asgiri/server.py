@@ -149,23 +149,37 @@ class Server:
         cert_data: bytes | None = None,
         key_data: bytes | None = None,
         lifespan: LifespanPolicy | None = None,
+        enable_http3: bool = True,
+        http3_port: int | None = None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.app = app
         self.host = host
         self.port = port
+        self.http_version = http_version or HttpProtocolVersion.AUTO
+        self.enable_http3 = enable_http3
+        self.http3_port = http3_port or port  # Default to same port as TCP
+        self.certfile = certfile
+        self.keyfile = keyfile
+        self.cert_data = cert_data
+        self.key_data = key_data
         self.lifespan_handler = LifespanHandler(app, lifespan or LifespanPolicy.AUTO)
-        match http_version:
+        
+        match self.http_version:
             case HttpProtocolVersion.HTTP_1_1:
                 self.protocol_cls = HTTP11ServerProtocol
             case HttpProtocolVersion.HTTP_2:
                 self.protocol_cls = Http2ServerProtocol
+            case HttpProtocolVersion.HTTP_3:
+                # HTTP/3 only mode - will only start QUIC server
+                self.protocol_cls = None
+                self.enable_http3 = True
             case HttpProtocolVersion.AUTO | None:
                 # Default to auto-detection for best compatibility
                 self.protocol_cls = AutoProtocol
             case _:
                 raise NotImplementedError(
-                    f"Protocol version '{http_version}' not implemented yet"
+                    f"Protocol version '{self.http_version}' not implemented yet"
                 )
         
         # SSL/TLS configuration
@@ -211,26 +225,108 @@ class Server:
             # Start lifespan
             await self.lifespan_handler.startup()
             
-            # Create and start the server
-            server = await loop.create_server(
-                protocol_factory, 
-                self.host, 
-                self.port, 
-                ssl=self.ssl_context,
-                start_serving=True
-            )
+            # Create TCP server (HTTP/1.1 and HTTP/2) unless HTTP/3 only
+            tcp_server = None
+            if self.protocol_cls is not None:
+                tcp_server = await loop.create_server(
+                    protocol_factory, 
+                    self.host, 
+                    self.port, 
+                    ssl=self.ssl_context,
+                    start_serving=True
+                )
+                
+                addr = tcp_server.sockets[0].getsockname()
+                scheme = "https" if self.ssl_context else "http"
+                self.logger.info(f"Serving on {scheme}://{addr[0]}:{addr[1]}")
             
-            addr = server.sockets[0].getsockname()
-            scheme = "https" if self.ssl_context else "http"
-            self.logger.info(f"Serving on {scheme}://{addr[0]}:{addr[1]}")
+            # Start HTTP/3 (QUIC) server if enabled
+            http3_server = None
+            if self.enable_http3 and self.http_version in (
+                HttpProtocolVersion.HTTP_3, 
+                HttpProtocolVersion.AUTO
+            ):
+                http3_server = await self._start_http3_server()
             
-            async with server:
-                # Wait for shutdown signal
-                await shutdown_event.wait()
-                self.logger.info("Shutting down server...")
+            # Wait for shutdown signal
+            await shutdown_event.wait()
+            self.logger.info("Shutting down server...")
+            
+            # Close servers
+            if tcp_server:
+                tcp_server.close()
+                await tcp_server.wait_closed()
+            
+            if http3_server:
+                http3_server.close()
         
         finally:
             # Always shutdown lifespan
             await self.lifespan_handler.shutdown()
             self.logger.info("Server shutdown complete")
+
+    async def _start_http3_server(self):
+        """Start HTTP/3 (QUIC) server."""
+        try:
+            from aioquic.asyncio import serve
+            from aioquic.quic.configuration import QuicConfiguration
+            from .proto.http3 import HTTP3ServerProtocol
+        except ImportError:
+            self.logger.error("aioquic not installed. HTTP/3 support requires 'pip install aioquic'")
+            return None
+        
+        # HTTP/3 requires TLS
+        if not self.ssl_context and not (self.certfile or self.cert_data):
+            self.logger.warning(
+                "HTTP/3 requires TLS. Either provide certificates or disable HTTP/3. "
+                "Skipping HTTP/3 server startup."
+            )
+            return None
+        
+        # Create QUIC configuration
+        configuration = QuicConfiguration(
+            alpn_protocols=["h3"],  # HTTP/3
+            is_client=False,
+            max_datagram_frame_size=65536,
+        )
+        
+        # Load certificates
+        if self.certfile:
+            configuration.load_cert_chain(self.certfile, self.keyfile)
+        elif self.cert_data:
+            # For in-memory certificates, we need to write to temp files
+            # This is a limitation of aioquic's configuration
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.pem') as cert_f:
+                cert_f.write(self.cert_data)
+                cert_path = cert_f.name
+            
+            if self.key_data:
+                with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.pem') as key_f:
+                    key_f.write(self.key_data)
+                    key_path = key_f.name
+            else:
+                key_path = None
+            
+            configuration.load_cert_chain(cert_path, key_path)
+        
+        def create_protocol(*args, **kwargs):
+            return HTTP3ServerProtocol(
+                *args,
+                app=self.app,
+                server=(self.host or "127.0.0.1", self.http3_port),
+                **kwargs
+            )
+        
+        # Start QUIC server
+        server = await serve(
+            self.host or "::",
+            self.http3_port,
+            configuration=configuration,
+            create_protocol=create_protocol,
+        )
+        
+        self.logger.info(f"HTTP/3 (QUIC) listening on UDP port {self.http3_port}")
+        
+        return server
 

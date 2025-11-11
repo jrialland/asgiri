@@ -100,6 +100,101 @@ class Sender:
             raise
 
 
+class UpgradeStreamSender:
+    """ASGI send callable for HTTP/2 upgrade stream (stream 1).
+    
+    This sender handles stream 1 specially since it's created from an HTTP/1.1
+    upgrade and needs to work around h2 library's stream creation constraints.
+    """
+
+    def __init__(
+        self,
+        conn: h2.connection.H2Connection,
+        transport: asyncio.Transport,
+        stream_id: int,
+    ):
+        """Initialize the UpgradeStreamSender.
+        Args:
+            conn: The h2 Connection object.
+            transport: The transport to write data to.
+            stream_id: The HTTP/2 stream ID (must be 1).
+        """
+        assert stream_id == 1, "UpgradeStreamSender is only for stream 1"
+        self.conn = conn
+        self.transport = transport
+        self.stream_id = stream_id
+        self.ended = False
+        self._headers_sent = False
+
+    async def __call__(
+        self,
+        message: (
+            HTTPResponseStartEvent | HTTPResponseBodyEvent | HTTPResponseTrailersEvent
+        ),
+    ) -> None:
+        if self.ended:
+            raise RuntimeError("Cannot send messages after response has ended.")
+
+        try:
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                headers = message.get("headers", [])
+                response_headers = [(b":status", str(status_code).encode())] + list(
+                    headers
+                )
+                
+                # Manually create stream 1 if it doesn't exist
+                if self.stream_id not in self.conn.streams:
+                    # We need to manually add stream 1 to the connection
+                    # This is a workaround for the h2 library's stream management
+                    from h2.stream import H2Stream, StreamInputs
+                    
+                    stream = H2Stream(
+                        stream_id=self.stream_id,
+                        config=self.conn.config,
+                        inbound_window_size=self.conn.local_settings.initial_window_size,
+                        outbound_window_size=self.conn.remote_settings.initial_window_size,
+                    )
+                    # Don't transition state - let send_headers do it
+                    self.conn.streams[self.stream_id] = stream
+                
+                self.conn.send_headers(
+                    stream_id=self.stream_id,
+                    headers=response_headers,
+                    end_stream=False,
+                )
+                self.transport.write(self.conn.data_to_send())
+                self._headers_sent = True
+                
+            elif message["type"] == "http.response.body":
+                body = message.get("body", b"")
+                more_body = message.get("more_body", False)
+                self.conn.send_data(
+                    stream_id=self.stream_id,
+                    data=body,
+                    end_stream=not more_body,
+                )
+                self.transport.write(self.conn.data_to_send())
+                if not more_body:
+                    self.ended = True
+            elif message["type"] == "http.response.trailers":
+                trailers = message.get("headers", [])
+                self.conn.send_headers(
+                    stream_id=self.stream_id,
+                    headers=list(trailers),
+                    end_stream=True,
+                )
+                self.transport.write(self.conn.data_to_send())
+                self.ended = True
+        except Exception as e:
+            # Stream may have been reset by client or connection closed
+            logging.getLogger(__name__).warning(
+                f"Error sending on upgrade stream {self.stream_id}: {e}"
+            )
+            self.ended = True
+            raise
+
+
 class StreamState:
     """Holds state for an individual HTTP/2 stream."""
 
@@ -111,14 +206,26 @@ class StreamState:
 
 class Http2ServerProtocol(asyncio.Protocol):
 
-    def __init__(self, server: tuple[str, int], app: ASGIApplication):
+    def __init__(
+        self,
+        server: tuple[str, int],
+        app: ASGIApplication,
+        advertise_http3: bool = True,
+    ):
         super().__init__()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.server = server
         self.conn = None
         self.transport = None
         self.client = None
-        self.app = app
+        self.advertise_http3 = advertise_http3
+        
+        # Wrap app to add HTTP/3 advertisement if enabled
+        if advertise_http3:
+            self.app = self._wrap_with_http3_advertisement(app)
+        else:
+            self.app = app
+        
         self.stream_states: dict[int, StreamState] = {}
 
     def _write_to_transport(self) -> None:
@@ -281,6 +388,133 @@ class Http2ServerProtocol(asyncio.Protocol):
         }
         return scope
 
+    def _handle_upgrade_stream_1(
+        self,
+        headers: list[tuple[bytes, bytes]],
+        client: tuple[str, int] | None,
+        server: tuple[str, int],
+        ssl: bool,
+    ):
+        """Handle the HTTP/1.1 request that was upgraded to HTTP/2 as stream 1.
+        
+        Per RFC 7540 Section 3.2, the HTTP/1.1 request sent prior to upgrade
+        is assigned stream identifier 1 with default priority values.
+        
+        Since we cannot use the h2 library to create server-initiated stream 1,
+        we manually create the stream state and handle it specially.
+        
+        Args:
+            headers: The HTTP/2 headers converted from HTTP/1.1 request.
+            client: The client address.
+            server: The server address.
+            ssl: Whether the connection uses SSL.
+        """
+        stream_id = 1
+        
+        # Build scope from headers
+        raw_path = b"/"
+        method = "GET"
+        scheme = "https" if ssl else "http"
+        regular_headers = []
+        
+        for name, value in headers:
+            if name == b":path":
+                raw_path = value
+            elif name == b":method":
+                method = value.decode()
+            elif name == b":scheme":
+                scheme = value.decode()
+            elif name == b":authority":
+                pass  # Already in headers if needed
+            else:
+                regular_headers.append((name, value))
+        
+        url: rfc3986.ParseResult = rfc3986.urlparse(raw_path.decode())
+        scope: HTTPScope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.2"},
+            "http_version": "2",
+            "method": method,
+            "path": url.path or "/",
+            "raw_path": raw_path,
+            "query_string": url.query.encode() if url.query else b"",
+            "scheme": scheme,
+            "headers": regular_headers,
+            "client": client,
+            "server": server,
+            "state": {},
+            "extensions": {},
+        }
+        
+        # Create stream state for stream 1
+        # We use a special sender that bypasses h2's stream creation
+        stream_state = self.stream_states[stream_id] = StreamState(stream_id)
+        
+        # Create the stream manually if it doesn't exist
+        if stream_id not in self.conn.streams:
+            from h2.stream import H2Stream, StreamInputs
+            
+            stream = H2Stream(
+                stream_id=stream_id,
+                config=self.conn.config,
+                inbound_window_size=self.conn.local_settings.initial_window_size,
+                outbound_window_size=self.conn.remote_settings.initial_window_size,
+            )
+            # Mark that the stream has received headers (from the HTTP/1.1 upgrade request)
+            stream.state_machine.process_input(StreamInputs.RECV_HEADERS)
+            self.conn.streams[stream_id] = stream
+        
+        stream_state.sender = Sender(
+            conn=self.conn, transport=self.transport, stream_id=stream_id
+        )
+        
+        # Send initial empty body message (upgrade request has no body)
+        asyncio.create_task(
+            stream_state.receiver.messages.put(
+                {
+                    "type": "http.request",
+                    "body": b"",
+                    "more_body": False,  # Upgrade request is complete
+                }
+            )
+        )
+        
+        # Handle the request
+        asyncio.create_task(self._handle_stream_1_request(scope, stream_state))
+    
+    async def _handle_stream_1_request(
+        self,
+        scope: HTTPScope,
+        stream_state: StreamState,
+    ):
+        """Handle the upgraded stream 1 request.
+        
+        Args:
+            scope: The ASGI scope.
+            stream_state: The stream state.
+        """
+        try:
+            await self.app(scope, stream_state.receiver, stream_state.sender)
+        except Exception as e:
+            self.logger.exception(f"Error handling stream 1 request: {e}")
+            # Send error response if not already sent
+            if not stream_state.sender.ended:
+                try:
+                    await stream_state.sender({
+                        "type": "http.response.start",
+                        "status": 500,
+                        "headers": [(b"content-length", b"0")],
+                    })
+                    await stream_state.sender({
+                        "type": "http.response.body",
+                        "body": b"",
+                    })
+                except:
+                    pass
+        finally:
+            # Clean up stream state
+            self.stream_states.pop(stream_state.stream_id, None)
+
     async def _handle_request(
         self,
         event: h2.events.RequestReceived,
@@ -378,6 +612,45 @@ class Http2ServerProtocol(asyncio.Protocol):
         
         # Start WebSocket handling
         asyncio.create_task(ws_protocol.handle())
+
+    def _wrap_with_http3_advertisement(self, app: ASGIApplication) -> ASGIApplication:
+        """Wrap ASGI app to advertise HTTP/3 via Alt-Svc header.
+        
+        Args:
+            app: The original ASGI application.
+            
+        Returns:
+            Wrapped ASGI application that adds Alt-Svc header.
+        """
+        async def wrapped_app(scope, receive, send):
+            if scope["type"] != "http":
+                # Only add headers for HTTP requests
+                await app(scope, receive, send)
+                return
+            
+            async def wrapped_send(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    port = self.server[1]
+                    
+                    # Advertise HTTP/3 (QUIC always requires TLS)
+                    # ma=86400 means max-age of 24 hours
+                    alt_svc_value = f'h3=":{port}"; ma=86400'.encode()
+                    
+                    # Check if Alt-Svc header already exists
+                    has_alt_svc = any(name.lower() == b"alt-svc" for name, _ in headers)
+                    if not has_alt_svc:
+                        headers.append((b"alt-svc", alt_svc_value))
+                    
+                    # Create new message with updated headers
+                    message = dict(message)
+                    message["headers"] = headers
+                
+                await send(message)
+            
+            await app(scope, receive, wrapped_send)
+        
+        return wrapped_app
 
 
 class HTTP2StreamTransport:

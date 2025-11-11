@@ -6,27 +6,61 @@ The `AutoProtocol` class in `asgiri.proto.auto` enables a server to automaticall
 
 ## How It Works
 
-### 1. Protocol Detection
+### Protocol Selection Priority
 
-When a client connects, the server buffers initial data and analyzes it to determine which protocol to use:
+The `AutoProtocol` uses a smart multi-tier approach to select the best protocol:
 
-- **HTTP/2 Prior Knowledge (h2c)**: Detects the HTTP/2 connection preface: `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`
-- **HTTP/1.1**: Detects standard HTTP/1.1 request methods (GET, POST, etc.)
+1. **ALPN Negotiation (TLS only)** - Fastest method, immediate selection during TLS handshake
+2. **HTTP/2 Prior Knowledge Detection** - Detects HTTP/2 connection preface for cleartext
+3. **HTTP/1.1 Fallback** - Default for standard HTTP requests
 
-### 2. Protocol Delegation
+### 1. ALPN Protocol Selection (TLS Connections)
+
+For TLS connections, ALPN (Application-Layer Protocol Negotiation) is the **preferred and fastest** method:
+
+- **No buffering required**: Protocol is selected during TLS handshake
+- **Zero latency**: Immediate delegation to the correct protocol handler
+- **Supported protocols**: `['h2', 'http/1.1']`
+
+**Flow:**
+```
+Client <-> Server: TLS Handshake
+  Client: ClientHello (ALPN: h2, http/1.1)
+  Server: ServerHello (ALPN: h2)
+Server: [Immediately uses HTTP/2 - no data inspection needed]
+```
+
+### 2. HTTP/2 Prior Knowledge Detection (Cleartext)
+
+For cleartext (non-TLS) connections, the server detects the HTTP/2 connection preface:
+
+- **Preface**: `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`
+- **Detection**: Buffers initial bytes and checks for preface
+- **Delegation**: Switches to `Http2ServerProtocol`
+
+### 3. HTTP/1.1 Fallback
+
+If neither ALPN nor HTTP/2 preface is detected:
+
+- **Detection**: Checks for standard HTTP/1.1 request methods (GET, POST, etc.)
+- **Delegation**: Switches to `HTTP11ServerProtocol`
+- **Advertisement**: Adds `Alt-Svc` header to advertise HTTP/2 and HTTP/3
+
+### 4. Protocol Delegation
 
 Once detected, the connection is delegated to the appropriate protocol handler:
 - `Http2ServerProtocol` for HTTP/2 connections
 - `HTTP11ServerProtocol` for HTTP/1.1 connections
 
-### 3. HTTP/2 Advertisement
+### 5. HTTP/2 and HTTP/3 Advertisement
 
 For HTTP/1.1 connections, the server automatically adds an `Alt-Svc` header to responses:
 ```
-Alt-Svc: h2c=":8000"
+Alt-Svc: h2c=":8000", h3=":8000"; ma=86400
 ```
 
-This advertises to clients that the server supports HTTP/2 on the same port, allowing clients to upgrade to HTTP/2 for future requests.
+This advertises to clients that the server supports HTTP/2 (h2c) and HTTP/3 (h3) on the same port, 
+allowing clients to upgrade for future requests.
 
 ## Usage
 
@@ -98,7 +132,7 @@ Server: [Detects HTTP/2, delegates to Http2ServerProtocol]
 Server -> Client: [HTTP/2 response]
 ```
 
-### 2. HTTP/1.1 Upgrade (Not Yet Implemented)
+### 2. HTTP/1.1 Upgrade (✅ Implemented)
 
 The client sends an HTTP/1.1 request with an `Upgrade: h2c` header:
 
@@ -117,25 +151,47 @@ Server -> Client: HTTP/1.1 101 Switching Protocols\r\n...
 [Connection switches to HTTP/2]
 ```
 
-> **Note:** This method is not yet implemented in the current version. The server will handle the request as HTTP/1.1 and advertise HTTP/2 via Alt-Svc for future connections.
+The server validates the upgrade request, sends a 101 Switching Protocols response,
+and switches the connection to HTTP/2. The original HTTP/1.1 request is processed
+as HTTP/2 stream 1 per RFC 7540 Section 3.2.
 
-### 3. ALPN (Application-Layer Protocol Negotiation)
+**Implementation notes:**
+- Validates presence of `Upgrade: h2c` header
+- Validates presence of `HTTP2-Settings` header with base64url encoded settings
+- Verifies `Connection` header includes both `Upgrade` and `HTTP2-Settings`
+- Sends raw 101 response (h11 library doesn't support 101 status code)
+- Properly handles stream 1 as the upgraded request
+- Supports query strings, custom headers, and all HTTP methods
 
-For TLS connections, the protocol is negotiated during the TLS handshake using ALPN:
+### 3. ALPN (Application-Layer Protocol Negotiation) - ✅ Implemented
+
+For TLS connections, the protocol is negotiated during the TLS handshake using ALPN.
+This is the **fastest and most efficient** method as it avoids waiting for application data.
 
 ```python
-# With TLS (future enhancement)
+from asgiri.server import Server
+
+# ALPN is automatically enabled for TLS connections
 server = Server(
     app=app,
     host="127.0.0.1",
     port=8443,
-    http_version=HttpProtocolVersion.AUTO,
-    certificate=cert_bytes,
-    private_key=key_bytes
+    certfile="cert.pem",
+    keyfile="key.pem",
 )
 ```
 
-The server would advertise `['h2', 'http/1.1']` during TLS negotiation.
+**Flow:**
+```
+Client <-> Server: TLS Handshake with ALPN
+  Client: ClientHello (ALPN: h2, http/1.1)
+  Server: ServerHello (ALPN: h2)
+Server: [Immediately delegates to HTTP/2, no data inspection needed]
+```
+
+The SSL context is configured with ALPN protocols `['h2', 'http/1.1']` and the
+`AutoProtocol` checks the negotiated protocol immediately on connection to delegate
+to the appropriate handler without waiting for data.
 
 ## Testing
 
@@ -153,6 +209,15 @@ Look for the `Alt-Svc` header in the response:
 < content-length: 30
 < 
 Hello! You're using HTTP/1.1
+```
+
+### Test HTTP/2 Connection (h2c Upgrade)
+
+```bash
+# Using curl with HTTP/1.1 upgrade
+curl -v --http2 http://localhost:8000/
+
+# Note: curl will attempt upgrade if server advertises it via Alt-Svc
 ```
 
 ### Test HTTP/2 Connection (Prior Knowledge)
@@ -228,16 +293,14 @@ This ensures all HTTP/1.1 responses advertise HTTP/2 capability without modifyin
 
 ## Limitations
 
-1. **HTTP/1.1 Upgrade**: The `Upgrade: h2c` mechanism is not yet implemented. Clients must use "prior knowledge" or make a new connection for HTTP/2.
+~~1. **HTTP/1.1 Upgrade**: The `Upgrade: h2c` mechanism is not yet implemented. Clients must use "prior knowledge" or make a new connection for HTTP/2.~~ **HTTP/1.1 Upgrade is now fully implemented!**
 
-2. **ALPN**: TLS/ALPN negotiation is not yet implemented. When TLS support is added, ALPN will be the preferred method for protocol negotiation.
-
-3. **HTTP/3**: HTTP/3 (QUIC) requires UDP and is not supported by this TCP-based implementation.
+~~2. **ALPN**: TLS/ALPN negotiation is not yet implemented. When TLS support is added, ALPN will be the preferred method for protocol negotiation.~~ **ALPN is now implemented!** TLS connections use ALPN to immediately select the appropriate protocol (h2 or http/1.1).
 
 ## Future Enhancements
 
-- [ ] Implement HTTP/1.1 Upgrade mechanism (101 Switching Protocols)
-- [ ] Add ALPN support for TLS connections
+- [x] ~~Implement HTTP/1.1 Upgrade mechanism (101 Switching Protocols)~~ **Implemented!**
+- [x] ~~Add ALPN support for TLS connections~~ **Implemented!**
 - [ ] Optimize buffer management for high-throughput scenarios
 - [ ] Add metrics/logging for protocol distribution
 - [ ] Support graceful protocol fallback

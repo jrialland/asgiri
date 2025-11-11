@@ -15,10 +15,10 @@ import argparse
 import importlib
 import logging
 import sys
-from typing import Any
 
+from asgiref.wsgi import WsgiToAsgi
 from asgiref.typing import ASGIApplication
-from .server import Server, HttpProtocolVersion
+from .server import Server, HttpProtocolVersion, LifespanPolicy
 from .ssl_utils import generate_self_signed_cert
 
 
@@ -61,14 +61,6 @@ def load_application(app_spec: str, wsgi: bool = False) -> ASGIApplication:
         ) from e
     
     if wsgi:
-        try:
-            from asgiref.wsgi import WsgiToAsgi
-        except ImportError as e:
-            raise ImportError(
-                "asgiref is required for WSGI support. "
-                "Install it with: pip install asgiref"
-            ) from e
-        
         app = WsgiToAsgi(app)
     
     return app
@@ -78,7 +70,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog='asgiri',
-        description='ASGI HTTP server with HTTP/1.1 and HTTP/2 support',
+        description='ASGI HTTP server with HTTP/1.1, HTTP/2, and HTTP/3 support',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -104,7 +96,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         action='store_const',
         const=HttpProtocolVersion.HTTP_3,
         dest='protocol',
-        help='Also listen to UDP connections (not implemented yet)'
+        help='Use HTTP/3 (QUIC) protocol only - requires TLS certificates'
     )
     
     # Server configuration
@@ -144,6 +136,15 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         '--wsgi',
         action='store_true',
         help='Treat application as WSGI (will be wrapped with asgiref.wsgi)'
+    )
+    
+    # Lifespan policy
+    parser.add_argument(
+        '--lifespan-policy',
+        type=str,
+        choices=['enabled', 'disabled', 'auto'],
+        default='auto',
+        help='Lifespan event handling policy (default: auto)'
     )
     
     # Logging
@@ -191,11 +192,6 @@ def main(args: list[str] | None = None) -> int:
     
     logger = logging.getLogger('asgiri.cli')
     
-    # Check for unimplemented features
-    if parsed_args.protocol == HttpProtocolVersion.HTTP_3:
-        logger.error("HTTP/3 is not implemented yet")
-        return 1
-    
     # Load the application
     try:
         app = load_application(parsed_args.application, wsgi=parsed_args.wsgi)
@@ -229,6 +225,14 @@ def main(args: list[str] | None = None) -> int:
     
     # Create and run server
     try:
+        # Convert lifespan policy string to enum
+        lifespan_policy_map = {
+            'enabled': LifespanPolicy.ENABLED,
+            'disabled': LifespanPolicy.DISABLED,
+            'auto': LifespanPolicy.AUTO,
+        }
+        lifespan_policy = lifespan_policy_map[parsed_args.lifespan_policy]
+        
         server = Server(
             app=app,
             host=parsed_args.host,
@@ -238,13 +242,14 @@ def main(args: list[str] | None = None) -> int:
             keyfile=keyfile,
             cert_data=cert_data,
             key_data=key_data,
+            lifespan=lifespan_policy,
         )
         
         protocol_str = parsed_args.protocol.value
         tls_str = "with TLS" if (parsed_args.selfcert or certfile) else "without TLS"
         logger.info(
             f"Starting server on {parsed_args.host}:{parsed_args.port} "
-            f"({protocol_str}, {tls_str})"
+            f"({protocol_str}, {tls_str}, lifespan: {parsed_args.lifespan_policy})"
         )
         
         server.run()

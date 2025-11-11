@@ -1,10 +1,11 @@
 """Protocol auto-detection and switching for HTTP/1.1 and HTTP/2.
 
 This module implements a protocol switcher that can:
-1. Detect HTTP/2 "prior knowledge" connections (h2c - HTTP/2 over cleartext)
-2. Handle HTTP/1.1 Upgrade requests to HTTP/2
-3. Automatically advertise HTTP/2 capability
-4. Delegate to appropriate protocol handler
+1. Use ALPN (Application-Layer Protocol Negotiation) for TLS connections
+2. Detect HTTP/2 "prior knowledge" connections (h2c - HTTP/2 over cleartext)
+3. Handle HTTP/1.1 requests with automatic protocol detection
+4. Automatically advertise HTTP/2 and HTTP/3 capability
+5. Delegate to appropriate protocol handler
 """
 
 import asyncio
@@ -23,12 +24,17 @@ HTTP2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 class AutoProtocol(asyncio.Protocol):
     """Protocol that auto-detects HTTP/1.1 vs HTTP/2 and delegates accordingly.
     
-    This protocol handles three scenarios:
-    1. HTTP/2 Prior Knowledge (h2c): Detects the HTTP/2 connection preface
-    2. HTTP/1.1 Upgrade: Responds to Upgrade: h2c headers
-    3. Plain HTTP/1.1: Falls back to HTTP/1.1 when no upgrade is requested
+    This protocol handles four scenarios:
+    1. ALPN Negotiation (TLS): Uses ALPN result to immediately select protocol
+    2. HTTP/2 Prior Knowledge (h2c): Detects the HTTP/2 connection preface
+    3. HTTP/1.1 Upgrade: Responds to Upgrade: h2c headers (future)
+    4. Plain HTTP/1.1: Falls back to HTTP/1.1 when no upgrade is requested
     
-    The protocol advertises HTTP/2 capability via the Alt-Svc header for HTTP/1.1 responses.
+    For TLS connections, ALPN is the preferred and fastest method as it avoids
+    waiting for application data. For cleartext connections, the server detects
+    the HTTP/2 preface or falls back to HTTP/1.1.
+    
+    The protocol advertises HTTP/2 and HTTP/3 capability via Alt-Svc headers.
     """
 
     def __init__(
@@ -62,15 +68,34 @@ class AutoProtocol(asyncio.Protocol):
     def connection_made(self, transport: asyncio.BaseTransport):
         """Handle a new connection.
         
+        For TLS connections, checks ALPN negotiation to immediately delegate
+        to the appropriate protocol without waiting for data.
+        
         Args:
             transport: The transport representing the connection.
         """
         assert isinstance(transport, asyncio.Transport)
         self.transport = transport
         
-        # For SSL connections, we could check ALPN negotiation result here
-        # alpn_protocol = transport.get_extra_info('ssl_object').selected_alpn_protocol()
-        # if alpn_protocol == 'h2': delegate to HTTP/2 immediately
+        # For SSL/TLS connections, check ALPN negotiation result
+        ssl_object = transport.get_extra_info('ssl_object')
+        if ssl_object:
+            try:
+                alpn_protocol = ssl_object.selected_alpn_protocol()
+                if alpn_protocol:
+                    self.logger.info(f"ALPN negotiated protocol: {alpn_protocol}")
+                    
+                    # Delegate immediately based on ALPN result
+                    if alpn_protocol == 'h2':
+                        self._delegate_to_http2()
+                        return
+                    elif alpn_protocol == 'http/1.1':
+                        self._delegate_to_http11()
+                        return
+                    else:
+                        self.logger.warning(f"Unknown ALPN protocol: {alpn_protocol}, falling back to detection")
+            except Exception as e:
+                self.logger.debug(f"Could not retrieve ALPN protocol: {e}")
         
         self.logger.debug(f"Connection made, waiting for protocol detection")
 
@@ -151,7 +176,7 @@ class AutoProtocol(asyncio.Protocol):
             self.buffer.clear()
 
     def _create_http2_advertising_wrapper(self, app: ASGIApplication) -> ASGIApplication:
-        """Wrap the ASGI app to advertise HTTP/2 capability via Alt-Svc header.
+        """Wrap the ASGI app to advertise HTTP/2 and HTTP/3 capability via Alt-Svc header.
         
         Args:
             app: The original ASGI application.
@@ -160,10 +185,10 @@ class AutoProtocol(asyncio.Protocol):
             A wrapped ASGI application that adds Alt-Svc header to responses.
         """
         async def wrapped_app(scope, receive, send):
-            """Wrapper that adds Alt-Svc header to advertise HTTP/2 support."""
+            """Wrapper that adds Alt-Svc header to advertise HTTP/2 and HTTP/3 support."""
             async def wrapped_send(message):
                 if message["type"] == "http.response.start":
-                    # Add Alt-Svc header to advertise h2c (HTTP/2 cleartext) support
+                    # Add Alt-Svc header to advertise h2c and h3 support
                     headers = list(message.get("headers", []))
                     
                     # Check if Alt-Svc header already exists
@@ -172,9 +197,10 @@ class AutoProtocol(asyncio.Protocol):
                     )
                     
                     if not has_alt_svc:
-                        # Advertise h2c on the same port
+                        # Advertise both h2c (HTTP/2 cleartext) and h3 (HTTP/3) on the same port
                         port = self.server[1]
-                        alt_svc_value = f'h2c=":{port}"'.encode()
+                        # Combine h2c and h3 advertisements
+                        alt_svc_value = f'h2c=":{port}", h3=":{port}"; ma=86400'.encode()
                         headers.append((b"alt-svc", alt_svc_value))
                     
                     # Create modified message with updated headers

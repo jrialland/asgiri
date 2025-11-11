@@ -82,9 +82,9 @@ def generate_self_signed_cert(
         .issuer_name(issuer)
         .public_key(private_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.utcnow())
+        .not_valid_before(datetime.datetime.now(datetime.UTC))
         .not_valid_after(
-            datetime.datetime.utcnow() + datetime.timedelta(days=validity_days)
+            datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=validity_days)
         )
         .add_extension(
             x509.SubjectAlternativeName(san_list),
@@ -193,7 +193,9 @@ def create_ssl_context(
     """
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     
-    # Configure for HTTP/2 (ALPN)
+    # Configure ALPN for HTTP/3, HTTP/2, and HTTP/1.1
+    # Note: HTTP/3 uses QUIC which has its own ALPN negotiation, but we advertise it here
+    # for completeness. The order matters - clients will prefer the first matching protocol.
     context.set_alpn_protocols(['h2', 'http/1.1'])
     
     # Modern TLS configuration

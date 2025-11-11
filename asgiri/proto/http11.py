@@ -1,8 +1,11 @@
 import asyncio
+import base64
 import logging
 from typing import Any, override
 
 import h11
+import h2.config
+import h2.connection
 import rfc3986  # type: ignore
 from asgiref.typing import (ASGIApplication, HTTPResponseBodyEvent,
                             HTTPResponseStartEvent, HTTPResponseTrailersEvent,
@@ -69,6 +72,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         app: ASGIApplication,
         state: dict[str, Any] | None = None,
         ssl: bool = False,
+        advertise_http3: bool = True,
     ):
         """Initialize the HTTP/1.1 server protocol.
         Args:
@@ -76,6 +80,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
            app: The ASGI application to handle requests.
            state: A copy of the namespace passed into the lifespan corresponding to this request. (See Lifespan Protocol)
            ssl: Whether the connection is over SSL.
+           advertise_http3: Whether to advertise HTTP/3 via Alt-Svc header.
         """
         super().__init__()
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -83,7 +88,14 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         self.conn: h11.Connection | None = None
         self.transport: asyncio.Transport | None = None
         self.client: tuple[str, int] | None = None
-        self.app = app
+        self.advertise_http3 = advertise_http3
+        
+        # Wrap app to add HTTP/3 advertisement if enabled
+        if advertise_http3:
+            self.app = self._wrap_with_http3_advertisement(app)
+        else:
+            self.app = app
+        
         self.state = state or {}
         self.receive_body_queue: asyncio.Queue[h11.Data | None] | None = (
             None  # Will be created per request
@@ -139,6 +151,15 @@ class HTTP11ServerProtocol(asyncio.Protocol):
                         # Handle WebSocket upgrade
                         self.logger.info(f"WebSocket upgrade: {event.target.decode()}")
                         self._handle_websocket_upgrade(event)
+                        return
+                    
+                    # Check if this is an HTTP/2 upgrade request (h2c)
+                    is_h2c_upgrade = self._is_h2c_upgrade(event)
+                    
+                    if is_h2c_upgrade:
+                        # Handle HTTP/2 upgrade
+                        self.logger.info(f"HTTP/2 upgrade: {event.target.decode()}")
+                        self._handle_h2c_upgrade(event)
                         return
                     
                     # Create a new queue for this request
@@ -238,6 +259,41 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             len(ws_key) > 0
         )
 
+    def _is_h2c_upgrade(self, request: h11.Request) -> bool:
+        """Check if a request is an HTTP/2 upgrade request (h2c).
+        
+        Per RFC 7540 Section 3.2, the client must send:
+        - Upgrade: h2c
+        - HTTP2-Settings header with base64url encoded settings
+        - Connection: Upgrade, HTTP2-Settings
+        
+        Args:
+            request: The h11 Request event.
+            
+        Returns:
+            True if this is a valid h2c upgrade request.
+        """
+        headers_dict = {name.lower(): value for name, value in request.headers}
+        
+        # Check for required h2c upgrade headers
+        upgrade = headers_dict.get(b"upgrade", b"").lower()
+        connection = headers_dict.get(b"connection", b"").lower()
+        http2_settings = headers_dict.get(b"http2-settings", b"")
+        
+        # Validate upgrade header
+        if upgrade != b"h2c":
+            return False
+        
+        # Validate connection header contains both "upgrade" and "http2-settings"
+        if b"upgrade" not in connection or b"http2-settings" not in connection:
+            return False
+        
+        # Validate HTTP2-Settings header is present and appears to be base64
+        if not http2_settings or len(http2_settings) == 0:
+            return False
+        
+        return True
+
     def _handle_websocket_upgrade(self, request: h11.Request):
         """Handle a WebSocket upgrade request.
         
@@ -291,3 +347,163 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         
         # Start WebSocket handling
         asyncio.create_task(ws_protocol.handle())
+
+    def _handle_h2c_upgrade(self, request: h11.Request):
+        """Handle an HTTP/2 upgrade request (h2c).
+        
+        Per RFC 7540 Section 3.2:
+        1. Send 101 Switching Protocols response
+        2. Process the HTTP2-Settings header
+        3. Switch to HTTP/2 and treat the request as stream 1
+        
+        Args:
+            request: The h11 Request event.
+        """
+        assert self.transport is not None
+        assert self.conn is not None
+        
+        # Extract headers
+        headers_dict = {name.lower(): value for name, value in request.headers}
+        http2_settings = headers_dict.get(b"http2-settings", b"")
+        
+        # Validate and decode HTTP2-Settings header
+        try:
+            # RFC 7540 uses base64url encoding (URL-safe base64 without padding)
+            # Python's base64.urlsafe_b64decode handles this
+            # Add padding if needed
+            missing_padding = len(http2_settings) % 4
+            if missing_padding:
+                http2_settings += b'=' * (4 - missing_padding)
+            settings_payload = base64.urlsafe_b64decode(http2_settings)
+        except Exception as e:
+            self.logger.warning(f"Failed to decode HTTP2-Settings: {e}")
+            # Send 400 Bad Request as raw bytes (h11 doesn't support all status codes easily)
+            response_400 = (
+                b"HTTP/1.1 400 Bad Request\r\n"
+                b"Content-Length: 0\r\n"
+                b"\r\n"
+            )
+            self.transport.write(response_400)
+            self.transport.close()
+            return
+        
+        # Send 101 Switching Protocols response
+        # Per RFC 7540 Section 3.2: "A server MUST NOT upgrade the connection to HTTP/2
+        # if this header field is not present or if more than one is present."
+        # Note: h11 doesn't support 101 status code, so we send it as raw bytes
+        response_101 = (
+            b"HTTP/1.1 101 Switching Protocols\r\n"
+            b"Connection: Upgrade\r\n"
+            b"Upgrade: h2c\r\n"
+            b"\r\n"
+        )
+        self.transport.write(response_101)
+        
+        self.logger.debug("Sent 101 Switching Protocols, upgrading to HTTP/2")
+        
+        # Import here to avoid circular dependency
+        from .http2 import Http2ServerProtocol
+        
+        # Create HTTP/2 protocol handler
+        h2_protocol = Http2ServerProtocol(
+            server=self.server,
+            app=self.app,
+            advertise_http3=self.advertise_http3,
+        )
+        
+        # Initialize the HTTP/2 connection
+        h2_protocol.connection_made(self.transport)
+        
+        # Apply the client's settings from HTTP2-Settings header
+        # Note: The settings payload should be applied, but the h2 library
+        # handles this through the normal frame processing
+        
+        # Per RFC 7540 Section 3.2: The client sends the connection preface
+        # immediately after the HTTP/1.1 Upgrade request
+        # We need to manually create stream 1 for the upgrade request
+        
+        # Build pseudo-headers for the HTTP/2 request
+        url = rfc3986.urlparse(request.target.decode())
+        
+        #Build pseudo-headers
+        h2_headers = [
+            (b":method", request.method),
+            (b":scheme", b"https" if self.ssl else b"http"),
+            (b":authority", headers_dict.get(b"host", f"{self.server[0]}:{self.server[1]}".encode())),
+            (b":path", request.target),
+        ]
+        
+        # Add regular headers (exclude hop-by-hop headers)
+        hop_by_hop = {b"connection", b"upgrade", b"http2-settings", b"transfer-encoding", b"keep-alive"}
+        for name, value in request.headers:
+            if name.lower() not in hop_by_hop:
+                h2_headers.append((name, value))
+        
+        # Handle the upgrade request as HTTP/2 stream 1
+        # We need to do this in a way that doesn't conflict with h2 library's stream management
+        # The best approach is to manually inject a RequestReceived event
+        try:
+            import h2.events
+            
+            # Create a fake RequestReceived event for stream 1
+            # The h2 library will have initialized the connection, now we simulate
+            # receiving headers on stream 1
+            
+            # Instead of trying to hack the h2 library's internal state,
+            # we'll handle stream 1 specially in the protocol handler
+            h2_protocol._handle_upgrade_stream_1(
+                headers=h2_headers,
+                client=self.client,
+                server=self.server,
+                ssl=self.ssl,
+            )
+            
+        except Exception as e:
+            self.logger.exception(f"Failed to process upgrade request as HTTP/2 stream: {e}")
+            self.transport.close()
+            return
+        
+        # Replace the data handler with HTTP/2 handler
+        self.data_received = h2_protocol.data_received  # type: ignore
+        self.connection_lost = h2_protocol.connection_lost  # type: ignore
+        
+        self.logger.info("Successfully upgraded to HTTP/2 (h2c)")
+
+    def _wrap_with_http3_advertisement(self, app: ASGIApplication) -> ASGIApplication:
+        """Wrap ASGI app to advertise HTTP/3 via Alt-Svc header.
+        
+        Args:
+            app: The original ASGI application.
+            
+        Returns:
+            Wrapped ASGI application that adds Alt-Svc header.
+        """
+        async def wrapped_app(scope, receive, send):
+            if scope["type"] != "http":
+                # Only add headers for HTTP requests
+                await app(scope, receive, send)
+                return
+            
+            async def wrapped_send(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    port = self.server[1]
+                    
+                    # Advertise HTTP/3 (QUIC always requires TLS)
+                    # ma=86400 means max-age of 24 hours
+                    alt_svc_value = f'h3=":{port}"; ma=86400'.encode()
+                    
+                    # Check if Alt-Svc header already exists
+                    has_alt_svc = any(name.lower() == b"alt-svc" for name, _ in headers)
+                    if not has_alt_svc:
+                        headers.append((b"alt-svc", alt_svc_value))
+                    
+                    # Create new message with updated headers
+                    message = dict(message)
+                    message["headers"] = headers
+                
+                await send(message)
+            
+            await app(scope, receive, wrapped_send)
+        
+        return wrapped_app

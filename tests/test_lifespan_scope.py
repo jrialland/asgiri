@@ -10,8 +10,6 @@ support is implemented in the server.
 """
 import pytest
 import asyncio
-import threading
-import time
 import socket
 import httpx
 

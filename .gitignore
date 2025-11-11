@@ -20,3 +20,7 @@ htmlcov/
 .nox/
 .ipynb_checkpoints/
 .cache/
+
+# generated ssl files
+server.crt
+server.key
