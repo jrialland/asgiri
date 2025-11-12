@@ -1,11 +1,5 @@
 # Quick Reference: Protocol Switching
 
-## TL;DR
-
-**Yes, it's possible!** I've implemented automatic protocol switching that handles both HTTP/1.1 and HTTP/2 on the same port, with automatic HTTP/2 advertisement.
-
-## What You Get
-
 ```python
 from asgiri.server import Server
 
@@ -165,11 +159,7 @@ When clients use HTTP/2:
 
 ## Need More Info?
 
-- **How does it work?** → See `PROTOCOL_SWITCHING.md`
-- **Architecture details?** → See `ARCHITECTURE.md`
-- **Complete solution?** → See `SOLUTION_SUMMARY.md`
-- **Quick start?** → See `README.md`
+- **How does it work?** → See [PROTOCOL_SWITCHING.md](./PROTOCOL_SWITCHING.md)
+- **Architecture details?** → See [ARCHITECTURE.md](./ARCHITECTURE.md)
+- **Quick start?** → See [README.md](../README.md)
 
----
-
-**That's it!** Your server now supports both HTTP/1.1 and HTTP/2 automatically. 🎉

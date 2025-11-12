@@ -2,13 +2,15 @@
 
 import asyncio
 import logging
-from typing import Any, override
+from typing import Any, cast, override
 
 import h2.connection
 import h2.events
 import rfc3986  # type: ignore
-from asgiref.typing import (ASGIApplication, HTTPRequestEvent,
-                            HTTPResponseBodyEvent, HTTPResponseStartEvent,
+from asgiref.typing import (ASGI3Application, ASGIApplication,
+                            ASGIReceiveCallable, ASGISendCallable,
+                            HTTPRequestEvent, HTTPResponseBodyEvent,
+                            HTTPResponseStartEvent,
                             HTTPResponseTrailersEvent, HTTPScope,
                             WebSocketScope)
 
@@ -19,7 +21,7 @@ from .websocket import WebSocketProtocol
 class Receiver:
     """ASGI receive callable for HTTP/2 requests."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the Receiver."""
         self.messages: asyncio.Queue[HTTPRequestEvent] = asyncio.Queue(maxsize=32)
 
@@ -505,10 +507,14 @@ class Http2ServerProtocol(asyncio.Protocol):
             stream_state: The stream state.
         """
         try:
-            from asgiref.compatibility import guarantee_single_callable
-
-            app = guarantee_single_callable(self.app)
-            await app(scope, stream_state.receiver, stream_state.sender)
+            # App is already guaranteed to be single callable by server.py
+            assert stream_state.sender is not None, "Sender must be set before calling app"
+            app = cast(ASGI3Application, self.app)
+            await app(
+                scope,
+                cast(ASGIReceiveCallable, stream_state.receiver),
+                cast(ASGISendCallable, stream_state.sender),
+            )
         except Exception as e:
             self.logger.exception(f"Error handling stream 1 request: {e}")
             # Send error response if not already sent
@@ -542,10 +548,14 @@ class Http2ServerProtocol(asyncio.Protocol):
         stream_state: StreamState,
     ):
         try:
-            from asgiref.compatibility import guarantee_single_callable
-
-            app = guarantee_single_callable(self.app)
-            await app(scope, stream_state.receiver, stream_state.sender)
+            # App is already guaranteed to be single callable by server.py
+            assert stream_state.sender is not None, "Sender must be set before calling app"
+            app = cast(ASGI3Application, self.app)
+            await app(
+                scope,
+                cast(ASGIReceiveCallable, stream_state.receiver),
+                cast(ASGISendCallable, stream_state.sender),
+            )
         except Exception as e:
             self.logger.exception(f"Error handling request on stream {event.stream_id}")
         finally:
