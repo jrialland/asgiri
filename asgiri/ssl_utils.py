@@ -7,7 +7,6 @@ and manage SSL contexts for HTTPS support.
 
 import datetime
 import ipaddress
-import logging
 import ssl
 from pathlib import Path
 from typing import Tuple
@@ -17,8 +16,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtensionOID, NameOID
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def generate_self_signed_cert(

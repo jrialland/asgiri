@@ -13,11 +13,11 @@ Examples:
 
 import argparse
 import importlib
-import logging
 import sys
 
 from asgiref.typing import ASGIApplication
 from asgiref.wsgi import WsgiToAsgi
+from loguru import logger
 
 from .server import HttpProtocolVersion, LifespanPolicy, Server
 from .ssl_utils import generate_self_signed_cert
@@ -177,12 +177,13 @@ def main(args: list[str] | None = None) -> int:
         return e.code if isinstance(e.code, int) else 1
 
     # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, parsed_args.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    # Configure loguru logger
+    logger.remove()  # Remove default handler
+    logger.add(
+        sys.stderr,
+        level=parsed_args.log_level,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     )
-
-    logger = logging.getLogger("asgiri.cli")
 
     # Load the application
     try:

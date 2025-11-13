@@ -7,7 +7,6 @@ with better handling of packet loss.
 """
 
 import asyncio
-import logging
 from collections import defaultdict
 from typing import Any, Callable, cast
 
@@ -29,8 +28,7 @@ from asgiref.typing import (
     HTTPScope,
     WebSocketScope,
 )
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class HTTP3ServerProtocol(QuicConnectionProtocol):
@@ -49,7 +47,6 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.app = app
         self.server = server
         self.h3 = H3Connection(self._quic, enable_webtransport=True)
@@ -141,7 +138,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             self.stream_handlers[event.stream_id] = task
 
         except Exception as e:
-            self.logger.exception(
+            logger.exception(
                 f"Error handling request on stream {event.stream_id}: {e}"
             )
             # Send error response
@@ -184,7 +181,9 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         """
         stream_id = event.stream_id
 
-        self.logger.info(f"WebSocket connection requested on stream {stream_id}")
+        logger.info(
+            f"WebSocket connection requested on stream {stream_id}"
+        )
 
         try:
             # Build WebSocket scope from headers
@@ -206,7 +205,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             self.stream_handlers[stream_id] = task
 
         except Exception as e:
-            self.logger.exception(
+            logger.exception(
                 f"Error handling WebSocket connection {stream_id}: {e}"
             )
             # Send error response
@@ -289,7 +288,9 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         """
         session_id = event.stream_id
 
-        self.logger.info(f"WebTransport session requested on stream {session_id}")
+        logger.info(
+            f"WebTransport session requested on stream {session_id}"
+        )
 
         try:
             # Send 200 OK to accept the WebTransport session
@@ -303,10 +304,10 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             # Track this as an active WebTransport session
             self.webtransport_sessions[session_id] = None
             
-            self.logger.info(f"WebTransport session {session_id} accepted")
+            logger.info(f"WebTransport session {session_id} accepted")
 
         except Exception as e:
-            self.logger.exception(
+            logger.exception(
                 f"Error handling WebTransport session {session_id}: {e}"
             )
             # Send error response
@@ -446,13 +447,13 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             app = cast(ASGI3Application, self.app)
             await app(scope, receiver, sender)
         except Exception as e:
-            self.logger.exception(f"Error in ASGI app for stream {stream_id}: {e}")
+            logger.exception(f"Error in ASGI app for stream {stream_id}: {e}")
             # Try to send error response if headers not sent yet
             try:
                 self._send_error_response(stream_id, 500)
             except Exception as exc:
                 # Failed to send error response, log and continue
-                self.logger.debug(
+                logger.debug(
                     f"Failed to send error response for stream {stream_id}: {exc}"
                 )
         finally:
@@ -604,7 +605,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
 
             self.transmit()
         except Exception as e:
-            self.logger.exception(f"Failed to send error response: {e}")
+            logger.exception(f"Failed to send error response: {e}")
 
     def _handle_webtransport_stream_data(
         self, event: WebTransportStreamDataReceived
@@ -622,7 +623,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         data = event.data
         stream_ended = event.stream_ended
 
-        self.logger.debug(
+        logger.debug(
             f"WebTransport stream data: session={session_id}, stream={stream_id}, "
             f"len={len(data)}, ended={stream_ended}"
         )
@@ -690,7 +691,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             initial_data: Initial data received on this stream
             stream_ended: Whether the stream ended with initial data
         """
-        self.logger.debug(f"Handling WebTransport stream {stream_id} in session {session_id}")
+        logger.debug(f"Handling WebTransport stream {stream_id} in session {session_id}")
         
         # Build scope for this specific stream
         scope = {
@@ -754,7 +755,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             await app(scope, receive, send)
             
         except Exception as e:
-            self.logger.error(f"Error in WebTransport stream {stream_id}: {e}", exc_info=True)
+            logger.error(f"Error in WebTransport stream {stream_id}: {e}", exc_info=True)
         
         finally:
             # Cleanup
@@ -765,7 +766,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             key = (session_id, stream_id)
             self.webtransport_stream_handlers.pop(key, None)
             
-            self.logger.debug(f"WebTransport stream {stream_id} handler completed")
+            logger.debug(f"WebTransport stream {stream_id} handler completed")
 
     async def _run_webtransport_session(
         self, scope: dict[str, Any], session_id: int
@@ -774,7 +775,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         DEPRECATED: Session mode removed. WebTransport now uses per-stream mode only.
         This method is kept for backward compatibility but does nothing.
         """
-        self.logger.warning(
+        logger.warning(
             "WebTransport session mode is deprecated. Use per-stream mode instead."
         )
 
@@ -828,7 +829,6 @@ class HTTP3WebSocketHandler:
             h3_connection: H3Connection for sending data
             protocol: Parent HTTP3ServerProtocol for transmitting
         """
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.stream_id = stream_id
         self.scope = scope
         self.app = app
@@ -865,7 +865,7 @@ class HTTP3WebSocketHandler:
         """
         Handle the WebSocket connection lifecycle.
         """
-        self.logger.debug(f"WebSocket handler starting for stream {self.stream_id}")
+        logger.debug(f"WebSocket handler starting for stream {self.stream_id}")
 
         # Send connect event to application
         await self.receive_queue.put({"type": "websocket.connect"})
@@ -880,7 +880,7 @@ class HTTP3WebSocketHandler:
         try:
             await asyncio.gather(app_task, sender_task)
         except Exception as e:
-            self.logger.exception(f"Error in WebSocket handler: {e}")
+            logger.exception(f"Error in WebSocket handler: {e}")
         finally:
             if not self.closed:
                 self._close(1006, "Connection lost")
@@ -890,24 +890,24 @@ class HTTP3WebSocketHandler:
         try:
             app = cast(ASGI3Application, self.app)
             await app(self.scope, self._receive, self._send)
-            self.logger.debug("WebSocket app completed")
+            logger.debug("WebSocket app completed")
         except Exception as e:
             if "WebSocketDisconnect" in type(e).__name__:
-                self.logger.debug(f"WebSocket disconnected: {e}")
+                logger.debug(f"WebSocket disconnected: {e}")
             else:
-                self.logger.exception(f"Error in WebSocket application: {e}")
+                logger.exception(f"Error in WebSocket application: {e}")
                 if not self.closed:
                     self._close(1011, "Internal server error")
 
     async def _receive(self) -> dict[str, Any]:
         """ASGI receive callable."""
         event = await self.receive_queue.get()
-        self.logger.debug(f"App receiving: {event['type']}")
+        logger.debug(f"App receiving: {event['type']}")
         return event
 
     async def _send(self, message: dict[str, Any]):
         """ASGI send callable."""
-        self.logger.debug(f"App sending: {message['type']}")
+        logger.debug(f"App sending: {message['type']}")
         await self.send_queue.put(message)
 
     async def _sender(self):
@@ -927,7 +927,7 @@ class HTTP3WebSocketHandler:
                     await self._handle_close(message)
                     break
             except Exception as e:
-                self.logger.exception(f"Error handling message: {e}")
+                logger.exception(f"Error handling message: {e}")
                 break
 
     async def _handle_accept(self, message: dict[str, Any]):
@@ -957,7 +957,7 @@ class HTTP3WebSocketHandler:
         self.h3.send_headers(self.stream_id, headers)
         self.protocol.transmit()
 
-        self.logger.debug(f"WebSocket accepted on stream {self.stream_id}")
+        logger.debug(f"WebSocket accepted on stream {self.stream_id}")
 
     async def _handle_send(self, message: dict[str, Any]):
         """Handle websocket.send from application."""
@@ -999,7 +999,7 @@ class HTTP3WebSocketHandler:
             self.h3.send_data(self.stream_id, close_data, end_stream=True)
             self.protocol.transmit()
         except Exception as e:
-            self.logger.warning(f"Error sending close frame: {e}")
+            logger.warning(f"Error sending close frame: {e}")
 
         # Send disconnect event to app
         asyncio.create_task(
@@ -1056,7 +1056,7 @@ class HTTP3WebSocketHandler:
                     )
                 )
             elif isinstance(event, CloseConnection):
-                self.logger.debug(f"WebSocket close from client: {event.code}")
+                logger.debug(f"WebSocket close from client: {event.code}")
                 asyncio.create_task(
                     self.receive_queue.put(
                         {

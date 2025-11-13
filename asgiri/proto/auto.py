@@ -9,10 +9,10 @@ This module implements a protocol switcher that can:
 """
 
 import asyncio
-import logging
 from typing import Any, override
 
 from asgiref.typing import ASGIApplication
+from loguru import logger
 
 from .http2 import Http2ServerProtocol
 from .http11 import HTTP11ServerProtocol
@@ -53,7 +53,6 @@ class AutoProtocol(asyncio.Protocol):
             ssl: Whether the connection is over SSL (for ALPN negotiation).
         """
         super().__init__()
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.server = server
         self.app = app
         self.state = state or {}
@@ -86,7 +85,7 @@ class AutoProtocol(asyncio.Protocol):
             try:
                 alpn_protocol = ssl_object.selected_alpn_protocol()
                 if alpn_protocol:
-                    self.logger.info(f"ALPN negotiated protocol: {alpn_protocol}")
+                    logger.info(f"ALPN negotiated protocol: {alpn_protocol}")
 
                     # Delegate immediately based on ALPN result
                     if alpn_protocol == "h2":
@@ -96,13 +95,14 @@ class AutoProtocol(asyncio.Protocol):
                         self._delegate_to_http11()
                         return
                     else:
-                        self.logger.warning(
-                            f"Unknown ALPN protocol: {alpn_protocol}, falling back to detection"
+                        logger.warning(
+                            f"Unknown ALPN protocol: {alpn_protocol}, "
+                            "falling back to detection"
                         )
             except Exception as e:
-                self.logger.debug(f"Could not retrieve ALPN protocol: {e}")
+                logger.debug(f"Could not retrieve ALPN protocol: {e}")
 
-        self.logger.debug(f"Connection made, waiting for protocol detection")
+        logger.debug("Connection made, waiting for protocol detection")
 
     @override
     def data_received(self, data: bytes):
@@ -137,7 +137,7 @@ class AutoProtocol(asyncio.Protocol):
 
     def _delegate_to_http2(self):
         """Delegate to HTTP/2 protocol handler."""
-        self.logger.info("Detected HTTP/2 connection (prior knowledge)")
+        logger.info("Detected HTTP/2 connection (prior knowledge)")
         self.protocol_detected = True
 
         # Create HTTP/2 protocol handler
@@ -158,7 +158,7 @@ class AutoProtocol(asyncio.Protocol):
 
     def _delegate_to_http11(self):
         """Delegate to HTTP/1.1 protocol handler with HTTP/2 upgrade support."""
-        self.logger.info("Detected HTTP/1.1 connection")
+        logger.info("Detected HTTP/1.1 connection")
         self.protocol_detected = True
 
         # Wrap the ASGI app to advertise HTTP/2 capability
@@ -235,7 +235,7 @@ class AutoProtocol(asyncio.Protocol):
             self.delegated_protocol.connection_lost(exc)
         elif self.transport:
             self.transport.close()
-        self.logger.debug(f"Connection lost: {exc}")
+        logger.debug(f"Connection lost: {exc}")
 
     @override
     def eof_received(self):

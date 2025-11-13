@@ -1,7 +1,6 @@
 """HTTP/1.1 protocol implementation for ASGIRI server."""
 import asyncio
 import base64
-import logging
 from typing import Any, override
 
 import h11
@@ -9,6 +8,7 @@ import rfc3986  # type: ignore
 from asgiref.typing import (ASGIApplication, HTTPResponseBodyEvent,
                             HTTPResponseStartEvent, HTTPResponseTrailersEvent,
                             HTTPScope, WebSocketScope)
+from loguru import logger
 
 from .websocket import WebSocketProtocol
 
@@ -86,7 +86,6 @@ class HTTP11ServerProtocol(asyncio.Protocol):
            advertise_http3: Whether to advertise HTTP/3 via Alt-Svc header.
         """
         super().__init__()
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.server = server
         self.conn: h11.Connection | None = None
         self.transport: asyncio.Transport | None = None
@@ -122,7 +121,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             self.client = (peername[0], peername[1])
         else:
             self.client = None
-        self.logger.info(f"Connection made from {self.client}")
+        logger.info(f"Connection made from {self.client}")
 
     @override
     def connection_lost(self, exc):
@@ -132,7 +131,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         """
         if self.transport:
             self.transport.close()
-        self.logger.debug(f"Connection lost: {exc}")
+        logger.debug(f"Connection lost: {exc}")
 
     @override
     def eof_received(self):
@@ -156,7 +155,9 @@ class HTTP11ServerProtocol(asyncio.Protocol):
 
                     if is_websocket:
                         # Handle WebSocket upgrade
-                        self.logger.info(f"WebSocket upgrade: {event.target.decode()}")
+                        logger.info(
+                            f"WebSocket upgrade: {event.target.decode()}"
+                        )
                         self._handle_websocket_upgrade(event)
                         return
 
@@ -165,7 +166,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
 
                     if is_h2c_upgrade:
                         # Handle HTTP/2 upgrade
-                        self.logger.info(f"HTTP/2 upgrade: {event.target.decode()}")
+                        logger.info(f"HTTP/2 upgrade: {event.target.decode()}")
                         self._handle_h2c_upgrade(event)
                         return
 
@@ -233,7 +234,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         try:
             await self.app(scope, receive, Sender(self.conn, self.transport))
         except Exception:
-            self.logger.exception("Error handling request")
+            logger.exception("Error handling request")
         finally:
             # After response is sent, reset h11 connection state if possible
             # Only call start_next_cycle if the connection is in a reusable state
@@ -396,8 +397,9 @@ class HTTP11ServerProtocol(asyncio.Protocol):
                 http2_settings += b"=" * (4 - missing_padding)
             settings_payload = base64.urlsafe_b64decode(http2_settings)
         except Exception as e:
-            self.logger.warning(f"Failed to decode HTTP2-Settings: {e}")
-            # Send 400 Bad Request as raw bytes (h11 doesn't support all status codes easily)
+            logger.warning(f"Failed to decode HTTP2-Settings: {e}")
+            # Send 400 Bad Request as raw bytes
+            # (h11 doesn't support all status codes easily)
             response_400 = (
                 b"HTTP/1.1 400 Bad Request\r\n" b"Content-Length: 0\r\n" b"\r\n"
             )
@@ -417,7 +419,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         )
         self.transport.write(response_101)
 
-        self.logger.debug("Sent 101 Switching Protocols, upgrading to HTTP/2")
+        logger.debug("Sent 101 Switching Protocols, upgrading to HTTP/2")
 
         # Import here to avoid circular dependency
         from .http2 import Http2ServerProtocol
@@ -487,7 +489,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             )
 
         except Exception as e:
-            self.logger.exception(
+            logger.exception(
                 f"Failed to process upgrade request as HTTP/2 stream: {e}"
             )
             self.transport.close()
@@ -496,7 +498,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         # Replace the protocol on the transport
         self.transport.set_protocol(h2_protocol)
 
-        self.logger.info("Successfully upgraded to HTTP/2 (h2c)")
+        logger.info("Successfully upgraded to HTTP/2 (h2c)")
 
     def _wrap_with_http3_advertisement(self, app: ASGIApplication) -> ASGIApplication:
         """Wrap ASGI app to advertise HTTP/3 via Alt-Svc header.

@@ -1,7 +1,6 @@
 """HTTP/2 protocol implementation for ASGIRI server."""
 
 import asyncio
-import logging
 from typing import Any, cast, override
 
 import h2.connection
@@ -13,6 +12,7 @@ from asgiref.typing import (ASGI3Application, ASGIApplication,
                             HTTPResponseStartEvent,
                             HTTPResponseTrailersEvent, HTTPScope,
                             WebSocketScope)
+from loguru import logger
 
 from ..exceptions import ConnectionAbortedError
 from .websocket import WebSocketProtocol
@@ -94,7 +94,7 @@ class Sender:
                 self.ended = True
         except Exception as e:
             # Stream may have been reset by client or connection closed
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 f"Error sending on stream {self.stream_id}: {e}"
             )
             self.ended = True
@@ -192,7 +192,7 @@ class UpgradeStreamSender:
                 self.ended = True
         except Exception as e:
             # Stream may have been reset by client or connection closed
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 f"Error sending on upgrade stream {self.stream_id}: {e}"
             )
             self.ended = True
@@ -218,7 +218,6 @@ class Http2ServerProtocol(asyncio.Protocol):
         advertise_http3: bool = True,
     ):
         super().__init__()
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.server = server
         self.conn: h2.connection.H2Connection | None = None
         self.transport: asyncio.Transport | None = None
@@ -267,7 +266,7 @@ class Http2ServerProtocol(asyncio.Protocol):
         try:
             events = self.conn.receive_data(data)
         except Exception as e:
-            self.logger.error(f"Error receiving data: {e}")
+            logger.error(f"Error receiving data: {e}")
             return
 
         self._write_to_transport()
@@ -354,7 +353,7 @@ class Http2ServerProtocol(asyncio.Protocol):
                 if self.transport:
                     self.transport.close()
             else:
-                self.logger.debug(f"Unhandled event: {event}")
+                logger.debug(f"Unhandled event: {event}")
 
     @override
     def eof_received(self):
@@ -522,7 +521,7 @@ class Http2ServerProtocol(asyncio.Protocol):
                 cast(ASGISendCallable, stream_state.sender),
             )
         except Exception as e:
-            self.logger.exception(f"Error handling stream 1 request: {e}")
+            logger.exception(f"Error handling stream 1 request: {e}")
             # Send error response if not already sent
             if stream_state.sender and not stream_state.sender.ended:
                 try:
@@ -543,7 +542,7 @@ class Http2ServerProtocol(asyncio.Protocol):
                     )
                 except Exception as exc:
                     # Failed to send error response, log and continue
-                    self.logger.debug(
+                    logger.debug(
                         f"Failed to send error response on stream 1: {exc}"
                     )
         finally:
@@ -570,7 +569,9 @@ class Http2ServerProtocol(asyncio.Protocol):
                 cast(ASGISendCallable, stream_state.sender),
             )
         except Exception as e:
-            self.logger.exception(f"Error handling request on stream {event.stream_id}")
+            logger.exception(
+                f"Error handling request on stream {event.stream_id}"
+            )
         finally:
             # Clean up stream state after request is handled
             self.stream_states.pop(event.stream_id, None)

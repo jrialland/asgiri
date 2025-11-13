@@ -1,7 +1,6 @@
 """ASGIRI server implementation."""
 
 import asyncio
-import logging
 import signal
 import ssl
 from enum import Enum
@@ -9,6 +8,7 @@ from pathlib import Path
 
 from asgiref.typing import ASGIApplication
 from asgiref.compatibility import guarantee_single_callable
+from loguru import logger
 
 from .proto.auto import AutoProtocol
 from .proto.http2 import Http2ServerProtocol
@@ -35,7 +35,6 @@ class LifespanHandler:
         self.app = app
         self.policy = policy
         self.queue: asyncio.Queue = asyncio.Queue()
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.startup_complete = asyncio.Event()
         self.shutdown_complete = asyncio.Event()
         self.lifespan_task: asyncio.Task | None = None
@@ -57,11 +56,11 @@ class LifespanHandler:
     async def startup(self):
         """Start the lifespan handler."""
         if not self.should_handle_lifespan():
-            self.logger.info("Lifespan handling disabled")
+            logger.info("Lifespan handling disabled")
             self.startup_complete.set()
             return
 
-        self.logger.info("Starting lifespan handler")
+        logger.info("Starting lifespan handler")
 
         # Create the lifespan task
         self.lifespan_task = asyncio.create_task(
@@ -81,14 +80,14 @@ class LifespanHandler:
 
             # Check if startup failed
             if self.startup_failed:
-                self.logger.error(f"Lifespan startup failed: {self.startup_error}")
+                logger.error(f"Lifespan startup failed: {self.startup_error}")
                 if self.lifespan_task:
                     self.lifespan_task.cancel()
                 raise RuntimeError(f"Lifespan startup failed: {self.startup_error}")
 
-            self.logger.info("Lifespan startup completed successfully")
+            logger.info("Lifespan startup completed successfully")
         except asyncio.TimeoutError:
-            self.logger.error("Lifespan startup timed out")
+            logger.error("Lifespan startup timed out")
             if self.lifespan_task:
                 self.lifespan_task.cancel()
             raise
@@ -96,10 +95,10 @@ class LifespanHandler:
     async def shutdown(self):
         """Shutdown the lifespan handler."""
         if not self.should_handle_lifespan() or not self.lifespan_task:
-            self.logger.info("Lifespan shutdown skipped (not running)")
+            logger.info("Lifespan shutdown skipped (not running)")
             return
 
-        self.logger.info("Shutting down lifespan handler")
+        logger.info("Shutting down lifespan handler")
 
         # Send shutdown event
         await self.queue.put({"type": "lifespan.shutdown"})
@@ -107,9 +106,9 @@ class LifespanHandler:
         # Wait for shutdown to complete (with timeout)
         try:
             await asyncio.wait_for(self.shutdown_complete.wait(), timeout=10.0)
-            self.logger.info("Lifespan shutdown completed successfully")
+            logger.info("Lifespan shutdown completed successfully")
         except asyncio.TimeoutError:
-            self.logger.error("Lifespan shutdown timed out")
+            logger.error("Lifespan shutdown timed out")
         finally:
             # Ensure the task is cancelled if it's still running
             if self.lifespan_task and not self.lifespan_task.done():
@@ -124,20 +123,20 @@ class LifespanHandler:
 
     async def send(self, message):
         if message["type"] == "lifespan.startup.complete":
-            self.logger.info("Lifespan startup complete")
+            logger.info("Lifespan startup complete")
             self.startup_complete.set()
         elif message["type"] == "lifespan.startup.failed":
             error_msg = message.get("message", "Unknown error")
-            self.logger.error(f"Lifespan startup failed: {error_msg}")
+            logger.error(f"Lifespan startup failed: {error_msg}")
             # Store the error and unblock startup
             self.startup_failed = True
             self.startup_error = error_msg
             self.startup_complete.set()
         elif message["type"] == "lifespan.shutdown.complete":
-            self.logger.info("Lifespan shutdown complete")
+            logger.info("Lifespan shutdown complete")
             self.shutdown_complete.set()
         elif message["type"] == "lifespan.shutdown.failed":
-            self.logger.error(
+            logger.error(
                 f"Lifespan shutdown failed: {message.get('message', 'Unknown error')}"
             )
             self.shutdown_complete.set()  # Unblock even on failure
@@ -159,7 +158,6 @@ class Server:
         enable_http3: bool = True,
         http3_port: int | None = None,
     ):
-        self.logger = logging.getLogger(self.__class__.__name__)
         # Ensure app is a single callable (ASGI 3.0) - call once at initialization
         self.app = guarantee_single_callable(app)
         self.host = host
@@ -205,7 +203,7 @@ class Server:
                 key_data=key_data,
             )
             self.app = TLSExtensionMiddleware(self.app, ssl_context = self.ssl_context)
-            self.logger.info("SSL context created successfully")
+            logger.info("SSL context created successfully")
 
     def run(self):
         """Run the server (blocking). Creates an event loop if necessary."""
@@ -223,7 +221,7 @@ class Server:
         shutdown_event = asyncio.Event()
 
         def signal_handler(sig, frame):
-            self.logger.info(f"Received signal {sig}, shutting down...")
+            logger.info(f"Received signal {sig}, shutting down...")
             shutdown_event.set()
 
         # Register signal handlers (works on both Unix and Windows)
@@ -233,7 +231,7 @@ class Server:
             signal.signal(signal.SIGTERM, signal_handler)
         except ValueError:
             # signal only works in main thread - this is expected in tests
-            self.logger.debug("Signal handlers not registered (not in main thread)")
+            logger.debug("Signal handlers not registered (not in main thread)")
 
         try:
             # Start lifespan
@@ -253,7 +251,7 @@ class Server:
 
                 addr = tcp_server.sockets[0].getsockname()
                 scheme = "https" if self.ssl_context else "http"
-                self.logger.info(f"Serving on {scheme}://{addr[0]}:{addr[1]}")
+                logger.info(f"Serving on {scheme}://{addr[0]}:{addr[1]}")
 
             # Start HTTP/3 (QUIC) server if enabled
             http3_server = None
@@ -265,7 +263,7 @@ class Server:
 
             # Wait for shutdown signal
             await shutdown_event.wait()
-            self.logger.info("Shutting down server...")
+            logger.info("Shutting down server...")
 
             # Close servers
             if tcp_server:
@@ -278,7 +276,7 @@ class Server:
         finally:
             # Always shutdown lifespan
             await self.lifespan_handler.shutdown()
-            self.logger.info("Server shutdown complete")
+            logger.info("Server shutdown complete")
 
     async def _start_http3_server(self):
         """Start HTTP/3 (QUIC) server."""
@@ -288,14 +286,14 @@ class Server:
 
             from .proto.http3 import HTTP3ServerProtocol
         except ImportError:
-            self.logger.error(
+            logger.error(
                 "aioquic not installed. HTTP/3 support requires 'pip install aioquic'"
             )
             return None
 
         # HTTP/3 requires TLS
         if not self.ssl_context and not (self.certfile or self.cert_data):
-            self.logger.warning(
+            logger.warning(
                 "HTTP/3 requires TLS. Either provide certificates or disable HTTP/3. "
                 "Skipping HTTP/3 server startup."
             )
@@ -349,6 +347,6 @@ class Server:
             create_protocol=create_protocol,
         )
 
-        self.logger.info(f"HTTP/3 (QUIC) listening on UDP port {self.http3_port}")
+        logger.info(f"HTTP/3 (QUIC) listening on UDP port {self.http3_port}")
 
         return server

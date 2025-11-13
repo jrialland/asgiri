@@ -5,13 +5,13 @@ based WebSocket connections, implementing the ASGI WebSocket specification.
 """
 
 import asyncio
-import logging
 from typing import Any
 
 from asgiref.typing import (ASGIApplication, WebSocketAcceptEvent,
                             WebSocketCloseEvent, WebSocketConnectEvent,
                             WebSocketDisconnectEvent, WebSocketReceiveEvent,
                             WebSocketScope, WebSocketSendEvent)
+from loguru import logger
 from wsproto import ConnectionType, WSConnection
 from wsproto.events import (BytesMessage, CloseConnection, Event, Message,
                             Ping, Pong, Request, TextMessage)
@@ -46,7 +46,6 @@ class WebSocketProtocol:
                         wsproto will handle the handshake. If None, assumes handshake is
                         already completed (HTTP/2 case).
         """
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.transport = transport
         self.scope = scope
         self.app = app
@@ -62,7 +61,7 @@ class WebSocketProtocol:
                 if isinstance(event, Request):
                     # The request has been processed, we'll send AcceptConnection
                     # when the app calls websocket.accept
-                    self.logger.debug(f"WebSocket request received: {event.target}")
+                    logger.debug(f"WebSocket request received: {event.target}")
                     break
         else:
             # HTTP/2 case - handshake already done externally via CONNECT
@@ -78,7 +77,7 @@ class WebSocketProtocol:
 
             self.ws.send(AcceptConnection())
             # Mark that we don't need to send this to the transport
-            self.logger.debug(
+            logger.debug(
                 "HTTP/2 WebSocket - simulated handshake for wsproto state"
             )
 
@@ -111,7 +110,7 @@ class WebSocketProtocol:
         3. Starts the sender task
         4. Waits for both tasks to complete
         """
-        self.logger.debug("WebSocket handler starting")
+        logger.debug("WebSocket handler starting")
 
         # Send initial connect event
         await self.receive_queue.put(
@@ -130,23 +129,23 @@ class WebSocketProtocol:
         try:
             await asyncio.gather(self.app_task, sender_task)
         except Exception as e:
-            self.logger.exception(f"Error in WebSocket handler: {e}")
+            logger.exception(f"Error in WebSocket handler: {e}")
         finally:
             if not self.closed:
                 self.close(1006, "Connection lost")
 
     async def _run_app(self):
         """Run the ASGI application with WebSocket scope."""
-        self.logger.debug("Running ASGI app")
+        logger.debug("Running ASGI app")
         try:
             await self.app(self.scope, self._receive, self._send)
-            self.logger.debug("ASGI app completed normally")
+            logger.debug("ASGI app completed normally")
         except Exception as e:
             # Check if it's a normal WebSocket disconnect (FastAPI/Starlette pattern)
             if "WebSocketDisconnect" in type(e).__name__:
-                self.logger.debug(f"WebSocket disconnected: {e}")
+                logger.debug(f"WebSocket disconnected: {e}")
             else:
-                self.logger.exception(f"Error in WebSocket application: {e}")
+                logger.exception(f"Error in WebSocket application: {e}")
                 if not self.closed:
                     self.close(1011, "Internal server error")
 
@@ -157,7 +156,7 @@ class WebSocketProtocol:
             WebSocket event from the client.
         """
         event = await self.receive_queue.get()
-        self.logger.debug(f"App receiving event: {event['type']}")
+        logger.debug(f"App receiving event: {event['type']}")
         return event
 
     async def _send(
@@ -168,7 +167,7 @@ class WebSocketProtocol:
         Args:
             message: WebSocket message to send to the client.
         """
-        self.logger.debug(f"App sending message: {message['type']}")
+        logger.debug(f"App sending message: {message['type']}")
         await self.send_queue.put(message)
 
     async def _sender(self):
@@ -190,7 +189,7 @@ class WebSocketProtocol:
                     break
 
             except Exception as e:
-                self.logger.exception(f"Error in WebSocket sender: {e}")
+                logger.exception(f"Error in WebSocket sender: {e}")
                 break
 
     async def _handle_accept(self, message: WebSocketAcceptEvent):
@@ -219,13 +218,13 @@ class WebSocketProtocol:
             data = self.ws.send(event)
             self.transport.write(data)
 
-            self.logger.debug(
+            logger.debug(
                 f"WebSocket handshake sent with subprotocol: {subprotocol}"
             )
             self.needs_handshake_response = False
         else:
             # HTTP/2 case - handshake was already completed
-            self.logger.debug("WebSocket accepted (HTTP/2 - no handshake needed)")
+            logger.debug("WebSocket accepted (HTTP/2 - no handshake needed)")
 
     async def _handle_send(self, message: WebSocketSendEvent):
         """Handle websocket.send message from application.
@@ -282,7 +281,7 @@ class WebSocketProtocol:
         """
         if isinstance(event, Request):
             # This shouldn't happen as we've already handled the upgrade
-            self.logger.warning("Received unexpected Request event in WebSocket")
+            logger.warning("Received unexpected Request event in WebSocket")
 
         elif isinstance(event, TextMessage):
             # Text message from client
@@ -306,7 +305,7 @@ class WebSocketProtocol:
 
         elif isinstance(event, CloseConnection):
             # Client initiated close
-            self.logger.debug(
+            logger.debug(
                 f"WebSocket close from client: {event.code} {event.reason}"
             )
 
@@ -338,7 +337,7 @@ class WebSocketProtocol:
             pass
 
         else:
-            self.logger.warning(f"Unhandled WebSocket event: {type(event)}")
+            logger.warning(f"Unhandled WebSocket event: {type(event)}")
 
     def close(self, code: int = 1000, reason: str = ""):
         """Close the WebSocket connection.
@@ -359,7 +358,7 @@ class WebSocketProtocol:
             data = self.ws.send(CloseConnection(code=code, reason=reason))
             self.transport.write(data)
         except Exception as e:
-            self.logger.warning(f"Error sending close frame: {e}")
+            logger.warning(f"Error sending close frame: {e}")
 
         # Close transport
         self.transport.close()
