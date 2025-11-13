@@ -1,8 +1,12 @@
 [![build status](https://github.com/jrialland/asgiri/actions/workflows/test.yml/badge.svg)](https://github.com/jrialland/asgiri/actions)
-[![pypi](https://badge.fury.io/py/asgiri.svg)](https://badge.fury.io/py/asgiri)
 [![coverage](https://coveralls.io/repos/github/jrialland/asgiri/badge.svg?branch=develop)](https://coveralls.io/github/jrialland/asgiri?branch=develop)
-[![forks](https://img.shields.io/github/forks/jrialland/asgiri)](https://github.com/jrialland/asgiri)
 [![security: bandit](https://img.shields.io/badge/security-bandit-yellow.svg)](https://github.com/PyCQA/bandit)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![pypi](https://badge.fury.io/py/asgiri.svg)](https://badge.fury.io/py/asgiri)
+[![Python Versions](https://img.shields.io/pypi/pyversions/asgiri)](https://pypi.org/project/asgiri/)
+[![Downloads](https://static.pepy.tech/badge/asgiri)](https://pepy.tech/project/asgiri)
+[![License](https://img.shields.io/github/license/jrialland/asgiri)](https://github.com/jrialland/asgiri/blob/main/LICENSE)
+[![forks](https://img.shields.io/github/forks/jrialland/asgiri)](https://github.com/jrialland/asgiri)
 
 # Asgiri
 
