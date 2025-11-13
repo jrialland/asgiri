@@ -123,25 +123,6 @@ Most modern browsers will:
 - No HTTP/1.1 request needed
 - Optimal from the start 🎯
 
-## Debugging
-
-Enable debug logging:
-
-```python
-import logging
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-```
-
-You'll see:
-```
-INFO - AutoProtocol - Detected HTTP/1.1 connection
-INFO - AutoProtocol - Detected HTTP/2 connection (prior knowledge)
-```
-
 ## HTTP/2 Benefits
 
 When clients use HTTP/2:
