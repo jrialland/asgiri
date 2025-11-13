@@ -74,7 +74,10 @@ class AutoProtocol(asyncio.Protocol):
         Args:
             transport: The transport representing the connection.
         """
-        assert isinstance(transport, asyncio.Transport)
+        if not isinstance(transport, asyncio.Transport):
+            raise TypeError(
+                f"Expected asyncio.Transport, got {type(transport).__name__}"
+            )
         self.transport = transport
 
         # For SSL/TLS connections, check ALPN negotiation result
@@ -144,7 +147,8 @@ class AutoProtocol(asyncio.Protocol):
         )
 
         # Initialize the delegated protocol
-        assert self.transport is not None
+        if self.transport is None:
+            raise RuntimeError("Transport is None during HTTP/2 delegation")
         self.delegated_protocol.connection_made(self.transport)
 
         # Pass buffered data to the delegated protocol
@@ -169,7 +173,8 @@ class AutoProtocol(asyncio.Protocol):
         )
 
         # Initialize the delegated protocol
-        assert self.transport is not None
+        if self.transport is None:
+            raise RuntimeError("Transport is None during HTTP/1.1 delegation")
         self.delegated_protocol.connection_made(self.transport)
 
         # Pass buffered data to the delegated protocol

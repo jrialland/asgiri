@@ -201,9 +201,15 @@ def main(args: list[str] | None = None) -> int:
     if parsed_args.selfcert:
         # Generate self-signed certificate
         logger.info("Generating self-signed certificate...")
+        # Intentional bind to all interfaces when using 0.0.0.0
+        ip_addrs = (
+            [parsed_args.host]
+            if parsed_args.host != "0.0.0.0"  # nosec B104
+            else None
+        )
         cert_data, key_data = generate_self_signed_cert(
             hostname=parsed_args.host,
-            ip_addresses=[parsed_args.host] if parsed_args.host != "0.0.0.0" else None,
+            ip_addresses=ip_addrs,
         )
         logger.info("Self-signed certificate generated")
     elif parsed_args.cert or parsed_args.key:

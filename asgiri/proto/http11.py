@@ -36,9 +36,10 @@ class Sender:
         if self.ended:
             raise RuntimeError("Cannot send messages after response has ended.")
         if self.expect_start:
-            assert (
-                message["type"] == "http.response.start"
-            ), "Expected 'http.response.start' message"
+            if message["type"] != "http.response.start":
+                raise ValueError(
+                    f"Expected 'http.response.start', got '{message['type']}'"
+                )
             status_code = message["status"]
             headers = message.get("headers", [])
             response_start = h11.Response(
@@ -49,7 +50,10 @@ class Sender:
             self.transport.write(self.conn.send(response_start))
             self.expect_start = False
         else:
-            assert message["type"] == "http.response.body"
+            if message["type"] != "http.response.body":
+                raise ValueError(
+                    f"Expected 'http.response.body', got '{message['type']}'"
+                )
             body = message.get("body", b"")
             more_body = message.get("more_body", False)
             data_event = h11.Data(data=body)
@@ -107,7 +111,10 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         Args:
            transport: The transport representing the connection.
         """
-        assert isinstance(transport, asyncio.Transport)
+        if not isinstance(transport, asyncio.Transport):
+            raise TypeError(
+                f"Expected asyncio.Transport, got {type(transport).__name__}"
+            )
         self.transport = transport
         self.conn = h11.Connection(h11.SERVER)
         peername = transport.get_extra_info("peername")
@@ -134,7 +141,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
 
     @override
     def data_received(self, data: bytes):
-        assert self.conn is not None
+        if self.conn is None:
+            raise RuntimeError("Connection object is None in data_received")
         self.conn.receive_data(data)
         while True:
             event = self.conn.next_event()
@@ -218,12 +226,14 @@ class HTTP11ServerProtocol(asyncio.Protocol):
                     raise RuntimeError(f"Unexpected event: {event}")
 
     async def _handle_request(self, scope, receive):
-        assert self.conn is not None
-        assert self.transport is not None
+        if self.conn is None:
+            raise RuntimeError("Connection object is None in _handle_request")
+        if self.transport is None:
+            raise RuntimeError("Transport is None in _handle_request")
         try:
             await self.app(scope, receive, Sender(self.conn, self.transport))
-        except Exception as e:
-            self.logger.exception(f"Error handling request")
+        except Exception:
+            self.logger.exception("Error handling request")
         finally:
             # After response is sent, reset h11 connection state if possible
             # Only call start_next_cycle if the connection is in a reusable state
@@ -302,8 +312,10 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         Args:
             request: The h11 Request event.
         """
-        assert self.transport is not None
-        assert self.conn is not None
+        if self.transport is None:
+            raise RuntimeError("Transport is None in WebSocket upgrade")
+        if self.conn is None:
+            raise RuntimeError("Connection is None in WebSocket upgrade")
 
         # Create WebSocket scope first (before we send any response)
         url: rfc3986.ParseResult = rfc3986.urlparse(request.target.decode())
@@ -365,8 +377,10 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         Args:
             request: The h11 Request event.
         """
-        assert self.transport is not None
-        assert self.conn is not None
+        if self.transport is None:
+            raise RuntimeError("Transport is None in h2c upgrade")
+        if self.conn is None:
+            raise RuntimeError("Connection is None in h2c upgrade")
 
         # Extract headers
         headers_dict = {name.lower(): value for name, value in request.headers}

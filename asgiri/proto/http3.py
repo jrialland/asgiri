@@ -450,8 +450,11 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             # Try to send error response if headers not sent yet
             try:
                 self._send_error_response(stream_id, 500)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Failed to send error response, log and continue
+                self.logger.debug(
+                    f"Failed to send error response for stream {stream_id}: {exc}"
+                )
         finally:
             # Cleanup
             self.stream_handlers.pop(stream_id, None)

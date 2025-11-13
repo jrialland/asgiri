@@ -120,7 +120,10 @@ class UpgradeStreamSender:
             transport: The transport to write data to.
             stream_id: The HTTP/2 stream ID (must be 1).
         """
-        assert stream_id == 1, "UpgradeStreamSender is only for stream 1"
+        if stream_id != 1:
+            raise ValueError(
+                f"UpgradeStreamSender is only for stream 1, got {stream_id}"
+            )
         self.conn = conn
         self.transport = transport
         self.stream_id = stream_id
@@ -508,7 +511,10 @@ class Http2ServerProtocol(asyncio.Protocol):
         """
         try:
             # App is already guaranteed to be single callable by server.py
-            assert stream_state.sender is not None, "Sender must be set before calling app"
+            if stream_state.sender is None:
+                raise RuntimeError(
+                    "Sender must be set before calling app (stream 1)"
+                )
             app = cast(ASGI3Application, self.app)
             await app(
                 scope,
@@ -535,8 +541,11 @@ class Http2ServerProtocol(asyncio.Protocol):
                             more_body=False,
                         )
                     )
-                except:
-                    pass
+                except Exception as exc:
+                    # Failed to send error response, log and continue
+                    self.logger.debug(
+                        f"Failed to send error response on stream 1: {exc}"
+                    )
         finally:
             # Clean up stream state
             self.stream_states.pop(stream_state.stream_id, None)
@@ -549,7 +558,11 @@ class Http2ServerProtocol(asyncio.Protocol):
     ):
         try:
             # App is already guaranteed to be single callable by server.py
-            assert stream_state.sender is not None, "Sender must be set before calling app"
+            if stream_state.sender is None:
+                raise RuntimeError(
+                    f"Sender must be set before calling app "
+                    f"(stream {event.stream_id})"
+                )
             app = cast(ASGI3Application, self.app)
             await app(
                 scope,
@@ -585,7 +598,10 @@ class Http2ServerProtocol(asyncio.Protocol):
         Args:
             event: The RequestReceived event.
         """
-        assert self.transport is not None
+        if self.transport is None:
+            raise RuntimeError(
+                "Transport is None in WebSocket CONNECT handler"
+            )
 
         # Extract headers
         headers_dict = {name: value for name, value in event.headers}

@@ -161,9 +161,9 @@ def save_cert_and_key(
     # On Unix systems, set restrictive permissions (owner read/write only)
     try:
         key_path.chmod(0o600)
-    except Exception:
-        # Windows doesn't support chmod the same way
-        pass
+    except (OSError, AttributeError, NotImplementedError) as e:
+        # Windows doesn't support chmod the same way, or permissions may fail
+        logger.debug(f"Could not set permissions on {key_path}: {e}")
     logger.info(f"Private key saved to {key_path}")
 
     return cert_path, key_path
@@ -235,8 +235,9 @@ def create_ssl_context(
             try:
                 os.unlink(cert_tmp_path)
                 os.unlink(key_tmp_path)
-            except Exception:
-                pass
+            except (OSError, FileNotFoundError) as e:
+                # File may already be deleted or permission denied
+                logger.debug(f"Could not delete temp files: {e}")
     else:
         raise ValueError(
             "Either certfile/keyfile or cert_data/key_data must be provided"
