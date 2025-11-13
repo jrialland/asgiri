@@ -1,3 +1,9 @@
+[![build status](https://github.com/jrialland/asgiri/actions/workflows/test.yml/badge.svg)](https://github.com/jrialland/asgiri/actions)
+[![pypi](https://badge.fury.io/py/asgiri.svg)](https://badge.fury.io/py/asgiri)
+[![coverage](https://coveralls.io/repos/github/jrialland/asgiri/badge.svg?branch=develop)](https://coveralls.io/github/jrialland/asgiri?branch=develop)
+[![forks](https://img.shields.io/github/forks/jrialland/asgiri)](https://github.com/jrialland/asgiri)
+[![security: bandit](https://img.shields.io/badge/security-bandit-yellow.svg)](https://github.com/PyCQA/bandit)
+
 # Asgiri
 
 A high-performance ASGI server implementation supporting HTTP/1.1, HTTP/2, and HTTP/3 protocols with automatic protocol detection and seamless switching.
