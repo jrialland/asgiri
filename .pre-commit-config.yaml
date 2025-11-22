@@ -1,0 +1,9 @@
+# See https://pre-commit.ci for configuration options
+ci:
+  autofix_commit_msg: 'ci: auto-fix pre-commit issues [skip ci]'
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: 'ci: pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

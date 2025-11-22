@@ -1,0 +1,68 @@
+pull_request_rules:
+  # Auto-merge Dependabot PRs for minor/patch updates if CI passes
+  - name: Automatic merge for Dependabot minor/patch updates
+    conditions:
+      - author=dependabot[bot]
+      - check-success=test
+      - -title~=(major)
+      - -label~=(breaking|major)
+    actions:
+      merge:
+        method: squash
+        commit_message: title+body
+      delete_head_branch: {}
+
+  # Auto-approve Dependabot PRs
+  - name: Auto-approve Dependabot PRs
+    conditions:
+      - author=dependabot[bot]
+    actions:
+      review:
+        type: APPROVE
+        message: "Automatically approved by Mergify"
+
+  # Auto-label PRs based on changed files
+  - name: Label Python code changes
+    conditions:
+      - files~=\.py$
+    actions:
+      label:
+        add:
+          - "python"
+
+  - name: Label test changes
+    conditions:
+      - files~=^tests/
+    actions:
+      label:
+        add:
+          - "tests"
+
+  - name: Label documentation changes
+    conditions:
+      - files~=\.(md|rst)$
+    actions:
+      label:
+        add:
+          - "documentation"
+
+  - name: Label CI changes
+    conditions:
+      - files~=^\.github/
+    actions:
+      label:
+        add:
+          - "ci"
+
+  # Auto-merge approved PRs from maintainers
+  - name: Automatic merge on approval
+    conditions:
+      - "#approved-reviews-by>=1"
+      - check-success=test
+      - -draft
+      - -label~=(WIP|do-not-merge)
+    actions:
+      merge:
+        method: squash
+        commit_message: title+body
+      delete_head_branch: {}

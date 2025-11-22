@@ -1,0 +1,27 @@
+name: Security
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  bandit:
+    name: Bandit Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      run : pip install uv
+
+    - name: Activate uv environment
+      run: uv venv && source .venv/bin/activate
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run Bandit security scan
+      run: uv run bandit -r asgiri
