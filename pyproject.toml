@@ -38,6 +38,8 @@ dependencies = [
 
 [project.optional-dependencies]
 uvloop = ["uvloop>=0.21.0"]
+redis = ["redis>=4.2.0"]
+pymongo = ["pymongo>=4.0.0"]
 
 [project.scripts]
 asgiri = "asgiri.__main__:main"

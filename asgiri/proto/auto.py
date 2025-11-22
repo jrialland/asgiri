@@ -14,7 +14,7 @@ from typing import Any, cast, override
 from asgiref.typing import ASGI3Application
 from loguru import logger
 
-from asgiri.middleware import wrap_with_advertisements
+from asgiri.middlewares.headers import wrap_with_advertisements
 from asgiri.proto.http2 import Http2ServerProtocol
 from asgiri.proto.http11 import HTTP11ServerProtocol
 

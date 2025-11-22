@@ -21,7 +21,7 @@ from asgiref.typing import (
 from loguru import logger
 
 from asgiri.exceptions import ConnectionLostError
-from asgiri.middleware import wrap_with_advertisements
+from asgiri.middlewares.headers import wrap_with_advertisements
 from asgiri.proto.websocket import WebSocketProtocol
 from asgiri.spec import ASGI_SPEC_VERSION
 

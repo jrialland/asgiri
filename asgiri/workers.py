@@ -14,7 +14,7 @@ from typing import Callable
 from loguru import logger
 
 
-def get_worker_count(workers: str | int) -> int:
+def compute_workers_count(workers: str | int) -> int:
     """Calculate the number of workers to use.
 
     Args:
@@ -52,7 +52,7 @@ def get_worker_count(workers: str | int) -> int:
 def run_worker(
     worker_id: int,
     target_func: Callable[[], None],
-    restart_on_failure: bool = True,
+    *args,
 ) -> None:
     """Run a single worker process.
 
@@ -64,21 +64,20 @@ def run_worker(
     logger.info(f"Worker {worker_id} starting (PID: {os.getpid()})")
 
     try:
-        target_func()
+        target_func(*args)
     except KeyboardInterrupt:
         logger.info(f"Worker {worker_id} interrupted")
     except Exception as e:
         logger.exception(f"Worker {worker_id} failed with error: {e}")
-        if not restart_on_failure:
-            raise
+        raise
     finally:
         logger.info(f"Worker {worker_id} shutting down")
 
 
 def spawn_workers(
-    num_workers: int,
+    workers: str,
     target_func: Callable[[], None],
-    restart_on_failure: bool = False,
+    args: list = [],
 ) -> None:
     """Spawn multiple worker processes.
 
@@ -86,20 +85,19 @@ def spawn_workers(
     port using SO_REUSEPORT (which must be set up in the target_func).
 
     Args:
-        num_workers: Number of worker processes to spawn.
+        workers: Number of worker processes to spawn, or "auto" to detect CPU count.
         target_func: The function each worker should execute.
-        restart_on_failure: Whether to restart workers that crash.
+        args: Additional arguments to pass to the target function.
 
     Raises:
         ValueError: If num_workers < 1.
     """
-    if num_workers < 1:
-        raise ValueError(f"num_workers must be >= 1, got {num_workers}")
-
+    num_workers = compute_workers_count(workers)
+    
     # Special case: if only 1 worker, just run directly without forking
     if num_workers == 1:
         logger.info("Running with 1 worker (no multiprocessing)")
-        target_func()
+        target_func(*args)
         return
 
     logger.info(f"Starting {num_workers} worker processes")
@@ -111,7 +109,7 @@ def spawn_workers(
         """Start a single worker process."""
         process = multiprocessing.Process(
             target=run_worker,
-            args=(worker_id, target_func, restart_on_failure),
+            args=(worker_id, target_func, *args),
             name=f"asgiri-worker-{worker_id}",
         )
         process.start()

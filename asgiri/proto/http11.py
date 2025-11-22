@@ -16,7 +16,7 @@ from asgiref.typing import (
 )
 from loguru import logger
 
-from asgiri.middleware import wrap_with_advertisements
+from asgiri.middlewares.headers import wrap_with_advertisements
 from asgiri.spec import ASGI_SPEC_VERSION
 
 from .websocket import WebSocketProtocol
