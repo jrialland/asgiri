@@ -161,7 +161,7 @@ def spawn_workers(
                         f"Worker {worker_id} died with exit code {exit_code}"
                     )
 
-                    if restart_on_failure and not shutdown_event.is_set():
+                    if not shutdown_event.is_set():
                         logger.info(f"Restarting worker {worker_id}")
                         workers[worker_id] = start_worker(worker_id)
                     else:
