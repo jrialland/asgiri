@@ -11,6 +11,7 @@ from .ssl_utils import generate_self_signed_cert
 from .workers import spawn_workers
 from .app_loader import load_application
 
+
 def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
@@ -122,6 +123,7 @@ Examples:
 
     return parser
 
+
 class CliConfiguration:
     """Holds the configuration parsed from CLI arguments."""
 
@@ -139,7 +141,7 @@ class CliConfiguration:
         log_level: str,
         application: str,
     ):
-        
+
         self.host = host
         self.port = port
         self.protocol = protocol
@@ -151,6 +153,7 @@ class CliConfiguration:
         self.lifespan_policy = lifespan_policy
         self.log_level = log_level
         self.application = application
+
 
 def parse_args(args: list[str] | None = None) -> CliConfiguration:
     """Parse command-line arguments."""
@@ -181,7 +184,7 @@ def parse_args(args: list[str] | None = None) -> CliConfiguration:
         config.port = 8443 if is_tls else 8000
 
     # Handle self-signed certificate generation
-    ... # TODO: Implement self-signed cert generation if needed
+    ...  # TODO: Implement self-signed cert generation if needed
 
     # The --workers argument does not work for Windows
     if os.name == "nt":
@@ -194,17 +197,18 @@ def parse_args(args: list[str] | None = None) -> CliConfiguration:
 
     return config
 
+
 def worker_process(CliConfig: CliConfiguration) -> None:
     """Function to run in each worker process."""
 
-    
     # Configure logging
     # Configure loguru logger
     logger.remove()  # Remove default handler
     logger.add(
         sys.stderr,
         level=CliConfig.log_level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        #       format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
     )
 
     # Load the application
@@ -219,6 +223,7 @@ def worker_process(CliConfig: CliConfiguration) -> None:
 
     def is_multiprocessing_worker() -> bool:
         import multiprocessing
+
         return multiprocessing.current_process().name != "MainProcess"
 
     server = Server(
@@ -233,6 +238,7 @@ def worker_process(CliConfig: CliConfiguration) -> None:
     )
 
     server.run()
+
 
 def main(args: list[str] | None = None) -> int:
     """Main entry point for the asgiri CLI."""

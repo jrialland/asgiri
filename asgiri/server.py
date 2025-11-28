@@ -102,8 +102,6 @@ class LifespanHandler:
                 raise RuntimeError(
                     f"Lifespan startup failed: {self.startup_error}"
                 )
-
-            logger.info("Lifespan startup completed successfully")
         except asyncio.TimeoutError:
             logger.error("Lifespan startup timed out")
             if self.lifespan_task:
@@ -124,7 +122,6 @@ class LifespanHandler:
         # Wait for shutdown to complete (with timeout)
         try:
             await asyncio.wait_for(self.shutdown_complete.wait(), timeout=10.0)
-            logger.info("Lifespan shutdown completed successfully")
         except asyncio.TimeoutError:
             logger.error("Lifespan shutdown timed out")
         finally:

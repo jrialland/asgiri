@@ -96,7 +96,6 @@ def spawn_workers(
     
     # Special case: if only 1 worker, just run directly without forking
     if num_workers == 1:
-        logger.info("Running with 1 worker (no multiprocessing)")
         target_func(*args)
         return
 
