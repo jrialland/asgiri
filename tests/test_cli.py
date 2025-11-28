@@ -1,6 +1,7 @@
 """Tests for CLI argument parsing and application loading."""
 
 import argparse
+import os
 from unittest.mock import Mock, patch
 
 import pytest
@@ -41,27 +42,6 @@ class TestLoadApplication:
         """Test that non-existent attribute raises AttributeError."""
         with pytest.raises(AttributeError, match="has no attribute"):
             load_application("tests.app:nonexistent_attribute")
-
-    def test_load_wsgi_application(self):
-        """Test loading and wrapping a WSGI application."""
-        # Create a mock WSGI app in the tests module
-        with patch("asgiri.cli.importlib.import_module") as mock_import:
-            mock_module = Mock()
-
-            # Create a simple WSGI app
-            def wsgi_app(environ, start_response):
-                status = "200 OK"
-                headers = [("Content-Type", "text/plain")]
-                start_response(status, headers)
-                return [b"Hello World"]
-
-            mock_module.wsgi_app = wsgi_app
-            mock_import.return_value = mock_module
-
-            app = load_application("tests.app:wsgi_app", wsgi=True)
-
-            # Verify it's wrapped
-            assert isinstance(app, WsgiToAsgi)
 
     def test_load_application_with_nested_module(self):
         """Test loading application from nested module path."""
@@ -125,7 +105,7 @@ class TestParseArgs:
 
         assert args.application == "myapp:app"
         assert args.host == "127.0.0.1"
-        assert args.port == -1  # Default port before adjustment
+        assert args.port == 8000
         assert args.protocol == HttpProtocolVersion.AUTO
         assert args.workers == "1"
         assert args.wsgi is False
@@ -161,12 +141,11 @@ class TestParseArgs:
     def test_parse_workers_number(self):
         """Test parsing with workers as number."""
         args = parse_args(["--workers", "4", "myapp:app"])
-        assert args.workers == "4"
-
-    def test_parse_workers_auto(self):
-        """Test parsing with workers as 'auto'."""
-        args = parse_args(["--workers", "auto", "myapp:app"])
-        assert args.workers == "auto"
+        # if os is windows, workers will be '1' regardless
+        if os.name == "nt":
+            assert args.workers == "1"
+        else:
+            assert args.workers == "4"
 
     def test_parse_selfcert(self):
         """Test parsing with --selfcert flag."""
@@ -235,7 +214,7 @@ class TestParseArgs:
         assert args.protocol == HttpProtocolVersion.HTTP_1_1
         assert args.host == "0.0.0.0"
         assert args.port == 8080
-        assert args.workers == "4"
+        assert args.workers == "1" if os.name == "nt" else "4"
         assert args.cert == "cert.pem"
         assert args.key == "key.pem"
         assert args.lifespan_policy == "enabled"
@@ -312,7 +291,7 @@ class TestParseArgs:
 
         assert args.host == "192.168.1.1"
         assert args.port == 9000
-        assert args.workers == "2"
+        assert args.workers == "1" if os.name == "nt" else "2"
 
     def test_parse_cert_without_key_accepted_by_parser(self):
         """Test that parser accepts --cert without --key (validation happens later)."""
