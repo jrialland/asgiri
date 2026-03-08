@@ -56,7 +56,9 @@ def generate_accept_key(key: str) -> str:
         The Sec-WebSocket-Accept response value.
     """
     concatenated = key + WEBSOCKET_GUID
-    sha1_hash = hashlib.sha1(concatenated.encode("latin1")).digest()
+    sha1_hash = hashlib.sha1(  # nosec B324 - SHA1 used for WebSocket handshake per RFC 6455, not security
+        concatenated.encode("latin1"), usedforsecurity=False
+    ).digest()
     return base64.b64encode(sha1_hash).decode("ascii")
 
 

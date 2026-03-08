@@ -202,8 +202,8 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
                 try:
                     self.h3.send_data(stream_id, b"", end_stream=True)
                     self.transmit()
-                except Exception:
-                    pass  # Stream may already be closed
+                except Exception:  # nosec B110 - Stream may already be closed
+                    logger.debug(f"Stream {stream_id} already closed")
                 self.websocket_handlers.pop(stream_id, None)
                 self.stream_handlers.pop(stream_id, None)
 
