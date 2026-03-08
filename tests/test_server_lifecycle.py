@@ -2,7 +2,7 @@
 
 import asyncio
 import signal
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -339,7 +339,7 @@ async def test_temp_cert_cleanup_error_handling():
     server._temp_key_file = "/nonexistent/key.pem"
 
     # Create a mock logger to capture warnings
-    with patch("asgiri.server.logger") as mock_logger:
+    with patch("asgiri.server.logger"):
         # Trigger cleanup (normally in finally block)
         import os
 

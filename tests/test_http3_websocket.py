@@ -6,7 +6,7 @@ which uses :method = CONNECT and :protocol = websocket.
 """
 
 import asyncio
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import pytest
 from aioquic.h3.events import HeadersReceived
@@ -287,16 +287,6 @@ async def test_websocket_handler_creation():
 async def test_websocket_data_routing():
     """Test that data is routed to WebSocket handler."""
     from aioquic.h3.events import DataReceived
-
-    headers = [
-        (b":method", b"CONNECT"),
-        (b":protocol", b"websocket"),
-        (b":scheme", b"https"),
-        (b":path", b"/ws"),
-        (b":authority", b"example.com"),
-    ]
-
-    event = HeadersReceived(stream_id=4, headers=headers, stream_ended=False)
 
     received_data = []
 

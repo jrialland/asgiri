@@ -22,7 +22,7 @@ from loguru import logger
 
 from asgiri.exceptions import ConnectionLostError
 from asgiri.middleware import wrap_with_advertisements
-from asgiri.proto.websocket import WebSocketProtocol
+from asgiri.proto.websocket_handler import WebSocketHandler
 from asgiri.spec import ASGI_SPEC_VERSION
 
 
@@ -341,12 +341,12 @@ class Http2ServerProtocol(asyncio.Protocol):
                         self._write_to_transport()
 
                     # Check if this is a WebSocket stream
-                    ws_protocol = getattr(
-                        stream_state_temp2, "ws_protocol", None
+                    ws_handler = getattr(
+                        stream_state_temp2, "ws_handler", None
                     )
-                    if ws_protocol:
+                    if ws_handler:
                         # Pass data to WebSocket handler
-                        ws_protocol.data_received(event.data)
+                        ws_handler.data_received(event.data)
                     else:
                         # Regular HTTP/2 data
                         asyncio.create_task(
@@ -597,7 +597,7 @@ class Http2ServerProtocol(asyncio.Protocol):
                 cast(ASGIReceiveCallable, stream_state.receiver),
                 cast(ASGISendCallable, stream_state.sender),
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Error handling request on stream {event.stream_id}"
             )
@@ -680,22 +680,36 @@ class Http2ServerProtocol(asyncio.Protocol):
             )
             self._write_to_transport()
 
-        # Create a custom transport wrapper for this stream
-        if self.conn and self.transport:
-            stream_transport = HTTP2StreamTransport(
-                self.conn, self.transport, event.stream_id, self
-            )
+        # Create callbacks for sending frames and closing the stream
+        def send_frame(frame_data: bytes) -> None:
+            """Send a WebSocket frame through the HTTP/2 stream."""
+            if self.conn and self.transport and not self.transport.is_closing():
+                self.conn.send_data(event.stream_id, frame_data)
+                self._write_to_transport()
 
-            # Create WebSocket protocol handler
-            ws_protocol = WebSocketProtocol(stream_transport, scope, self.app)  # type: ignore[arg-type]
+        def close_stream() -> None:
+            """Close the HTTP/2 stream."""
+            if self.conn and self.transport and not self.transport.is_closing():
+                self.conn.end_stream(event.stream_id)
+                self._write_to_transport()
+            # Clean up stream state
+            self.stream_states.pop(event.stream_id, None)
 
-            # Store stream as WebSocket
-            stream_state = StreamState(event.stream_id)
-            setattr(stream_state, "ws_protocol", ws_protocol)
-            self.stream_states[event.stream_id] = stream_state
+        # Create WebSocket handler (uses our new frame-based implementation)
+        ws_handler = WebSocketHandler(
+            scope=scope,
+            app=self.app,  # type: ignore[arg-type]
+            send_frame=send_frame,
+            close_stream=close_stream,
+        )
 
-            # Start WebSocket handling
-            asyncio.create_task(ws_protocol.handle())
+        # Store stream as WebSocket
+        stream_state = StreamState(event.stream_id)
+        setattr(stream_state, "ws_handler", ws_handler)
+        self.stream_states[event.stream_id] = stream_state
+
+        # Start WebSocket handling
+        asyncio.create_task(ws_handler.handle())
 
 
 class HTTP2StreamTransport:

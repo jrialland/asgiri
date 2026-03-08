@@ -6,7 +6,7 @@ including malformed headers, stream errors, and connection issues.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from aioquic.h3.events import DataReceived, HeadersReceived

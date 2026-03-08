@@ -1,6 +1,5 @@
 """Tests for HTTP/3 support."""
 
-import asyncio
 import logging
 from io import StringIO
 

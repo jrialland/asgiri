@@ -28,6 +28,7 @@ from asgiref.typing import (
 from loguru import logger
 
 from asgiri.spec import ASGI_SPEC_VERSION
+from asgiri.proto.websocket_handler import WebSocketHandler
 
 
 class HTTP3ServerProtocol(QuicConnectionProtocol):
@@ -66,7 +67,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         self.webtransport_stream_ended: dict[int, bool] = {}
 
         # Track WebSocket connections
-        self.websocket_handlers: dict[int, "HTTP3WebSocketHandler"] = {}
+        self.websocket_handlers: dict[int, WebSocketHandler] = {}
 
     def quic_event_received(self, event: QuicEvent) -> None:
         """
@@ -190,13 +191,28 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             # Build WebSocket scope from headers
             scope = self._build_websocket_scope(event)
 
-            # Create WebSocket handler
-            handler = HTTP3WebSocketHandler(
-                stream_id=stream_id,
+            # Create callbacks for sending frames and closing the stream
+            def send_frame(frame_data: bytes) -> None:
+                """Send a WebSocket frame through the HTTP/3 stream."""
+                self.h3.send_data(stream_id, frame_data, end_stream=False)
+                self.transmit()
+
+            def close_stream() -> None:
+                """Close the HTTP/3 stream."""
+                try:
+                    self.h3.send_data(stream_id, b"", end_stream=True)
+                    self.transmit()
+                except Exception:
+                    pass  # Stream may already be closed
+                self.websocket_handlers.pop(stream_id, None)
+                self.stream_handlers.pop(stream_id, None)
+
+            # Create WebSocket handler using our new frame-based implementation
+            handler = WebSocketHandler(
                 scope=scope,
                 app=self.app,
-                h3_connection=self.h3,
-                protocol=self,
+                send_frame=send_frame,
+                close_stream=close_stream,
             )
 
             self.websocket_handlers[stream_id] = handler
@@ -225,7 +241,6 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         headers_list = []
         path = b"/"
         scheme = b"wss"  # WebSocket over HTTP/3 is always secure
-        authority = b""
         subprotocols = []
 
         for name, value in event.headers:
@@ -238,7 +253,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
                 elif value == b"http":
                     scheme = b"ws"
             elif name == b":authority":
-                authority = value
+                _ = value  # Extracted but not currently used
             elif name == b"sec-websocket-protocol":
                 # Parse subprotocols (comma-separated)
                 subprotocols = [
@@ -327,7 +342,6 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         headers_list = []
         path = b"/"
         scheme = b"https"
-        authority = b""
 
         for name, value in event.headers:
             if name == b":path":
@@ -335,7 +349,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             elif name == b":scheme":
                 scheme = value
             elif name == b":authority":
-                authority = value
+                _ = value  # Extracted but not currently used
             elif name not in (b":method", b":protocol"):
                 # Regular header (skip pseudo-headers)
                 headers_list.append((name, value))
@@ -386,7 +400,6 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         method = b"GET"
         path = b"/"
         scheme = b"https"  # HTTP/3 always uses TLS
-        authority = b""
 
         for name, value in event.headers:
             if name == b":method":
@@ -396,7 +409,7 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             elif name == b":scheme":
                 scheme = value
             elif name == b":authority":
-                authority = value
+                _ = value  # Extracted but not currently used
             else:
                 # Regular header
                 headers_list.append((name, value))
@@ -824,292 +837,3 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
             pass
 
         return cast(ASGISendCallable, send)
-
-
-class HTTP3WebSocketHandler:
-    """
-    Handles WebSocket connections over HTTP/3 streams.
-
-    This implements RFC 9220 - Bootstrapping WebSockets with HTTP/3.
-    The WebSocket protocol runs over a single HTTP/3 stream after an
-    Extended CONNECT handshake.
-    """
-
-    def __init__(
-        self,
-        stream_id: int,
-        scope: WebSocketScope,
-        app: ASGI3Application,
-        h3_connection: H3Connection,
-        protocol: "HTTP3ServerProtocol",
-    ):
-        """
-        Initialize WebSocket handler.
-
-        Args:
-            stream_id: HTTP/3 stream ID
-            scope: ASGI WebSocket scope
-            app: ASGI application
-            h3_connection: H3Connection for sending data
-            protocol: Parent HTTP3ServerProtocol for transmitting
-        """
-        self.stream_id = stream_id
-        self.scope = scope
-        self.app = app
-        self.h3 = h3_connection
-        self.protocol = protocol
-
-        # WebSocket state
-        self.accepted = False
-        self.closed = False
-
-        # Queues for ASGI communication
-        self.receive_queue: asyncio.Queue = asyncio.Queue()
-        self.send_queue: asyncio.Queue = asyncio.Queue()
-
-        # Use wsproto for WebSocket frame handling
-        from wsproto import ConnectionType, WSConnection
-
-        self.ws = WSConnection(ConnectionType.SERVER)
-
-        # Simulate handshake to get wsproto into OPEN state
-        # (actual HTTP/3 handshake is done via Extended CONNECT)
-        fake_request = b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
-        self.ws.receive_data(fake_request)
-        from wsproto.events import AcceptConnection, Request
-
-        for event in self.ws.events():
-            if isinstance(event, Request):
-                break
-
-        # Accept to transition wsproto to OPEN state
-        self.ws.send(AcceptConnection())
-
-    async def handle(self):
-        """
-        Handle the WebSocket connection lifecycle.
-        """
-        logger.debug(f"WebSocket handler starting for stream {self.stream_id}")
-
-        # Send connect event to application
-        await self.receive_queue.put({"type": "websocket.connect"})
-
-        # Start application task
-        app_task = asyncio.create_task(self._run_app())
-
-        # Start sender task
-        sender_task = asyncio.create_task(self._sender())
-
-        # Wait for both to complete
-        try:
-            await asyncio.gather(app_task, sender_task)
-        except Exception as e:
-            logger.exception(f"Error in WebSocket handler: {e}")
-        finally:
-            if not self.closed:
-                self._close(1006, "Connection lost")
-
-    async def _run_app(self):
-        """Run the ASGI application."""
-        try:
-            app = cast(ASGI3Application, self.app)
-            await app(self.scope, self._receive, self._send)
-            logger.debug("WebSocket app completed")
-        except Exception as e:
-            if "WebSocketDisconnect" in type(e).__name__:
-                logger.debug(f"WebSocket disconnected: {e}")
-            else:
-                logger.exception(f"Error in WebSocket application: {e}")
-                if not self.closed:
-                    self._close(1011, "Internal server error")
-
-    async def _receive(self) -> dict[str, Any]:
-        """ASGI receive callable."""
-        event = await self.receive_queue.get()
-        logger.debug(f"App receiving: {event['type']}")
-        return event
-
-    async def _send(self, message: dict[str, Any]):
-        """ASGI send callable."""
-        logger.debug(f"App sending: {message['type']}")
-        await self.send_queue.put(message)
-
-    async def _sender(self):
-        """Process outgoing messages from the application."""
-        while not self.closed:
-            try:
-                message = await asyncio.wait_for(
-                    self.send_queue.get(), timeout=0.1
-                )
-            except asyncio.TimeoutError:
-                continue
-
-            try:
-                if message["type"] == "websocket.accept":
-                    await self._handle_accept(message)
-                elif message["type"] == "websocket.send":
-                    await self._handle_send(message)
-                elif message["type"] == "websocket.close":
-                    await self._handle_close(message)
-                    break
-            except Exception as e:
-                logger.exception(f"Error handling message: {e}")
-                break
-
-    async def _handle_accept(self, message: dict[str, Any]):
-        """
-        Handle websocket.accept from application.
-
-        Sends 200 OK response to complete the Extended CONNECT handshake.
-        """
-        if self.accepted:
-            raise RuntimeError("WebSocket already accepted")
-
-        self.accepted = True
-
-        # Build response headers
-        headers = [(b":status", b"200")]
-
-        # Add subprotocol if selected
-        subprotocol = message.get("subprotocol")
-        if subprotocol:
-            headers.append(
-                (b"sec-websocket-protocol", subprotocol.encode("latin1"))
-            )
-
-        # Add any additional headers
-        for name, value in message.get("headers", []):
-            headers.append((name, value))
-
-        # Send 200 OK via H3
-        self.h3.send_headers(self.stream_id, headers)
-        self.protocol.transmit()
-
-        logger.debug(f"WebSocket accepted on stream {self.stream_id}")
-
-    async def _handle_send(self, message: dict[str, Any]):
-        """Handle websocket.send from application."""
-        if not self.accepted:
-            raise RuntimeError("WebSocket not accepted yet")
-
-        from wsproto.events import Message
-
-        # Send WebSocket frame
-        if "bytes" in message and message["bytes"] is not None:
-            frame_data = self.ws.send(Message(data=message["bytes"]))
-        elif "text" in message and message["text"] is not None:
-            frame_data = self.ws.send(Message(data=message["text"]))
-        else:
-            raise ValueError("Message must have 'bytes' or 'text'")
-
-        # Send via H3 stream
-        self.h3.send_data(self.stream_id, frame_data, end_stream=False)
-        self.protocol.transmit()
-
-    async def _handle_close(self, message: dict[str, Any]):
-        """Handle websocket.close from application."""
-        code = message.get("code", 1000)
-        reason = message.get("reason") or ""
-        self._close(code, reason)
-
-    def _close(self, code: int = 1000, reason: str = ""):
-        """Close the WebSocket connection."""
-        if self.closed:
-            return
-
-        self.closed = True
-
-        try:
-            from wsproto.events import CloseConnection
-
-            # Send WebSocket close frame
-            close_data = self.ws.send(CloseConnection(code=code, reason=reason))
-            self.h3.send_data(self.stream_id, close_data, end_stream=True)
-            self.protocol.transmit()
-        except Exception as e:
-            logger.warning(f"Error sending close frame: {e}")
-
-        # Send disconnect event to app
-        asyncio.create_task(
-            self.receive_queue.put(
-                {
-                    "type": "websocket.disconnect",
-                    "code": code,
-                    "reason": reason,
-                }
-            )
-        )
-
-    def data_received(self, data: bytes):
-        """
-        Handle incoming WebSocket frame data.
-
-        Args:
-            data: Raw WebSocket frame bytes from the HTTP/3 stream
-        """
-        if self.closed:
-            return
-
-        # Feed data to wsproto
-        self.ws.receive_data(data)
-
-        # Process events
-        from wsproto.events import (
-            BytesMessage,
-            CloseConnection,
-            Ping,
-            Pong,
-            TextMessage,
-        )
-
-        for event in self.ws.events():
-            if isinstance(event, TextMessage):
-                asyncio.create_task(
-                    self.receive_queue.put(
-                        {
-                            "type": "websocket.receive",
-                            "text": event.data,
-                            "bytes": None,
-                        }
-                    )
-                )
-            elif isinstance(event, BytesMessage):
-                asyncio.create_task(
-                    self.receive_queue.put(
-                        {
-                            "type": "websocket.receive",
-                            "bytes": event.data,
-                            "text": None,
-                        }
-                    )
-                )
-            elif isinstance(event, CloseConnection):
-                logger.debug(f"WebSocket close from client: {event.code}")
-                asyncio.create_task(
-                    self.receive_queue.put(
-                        {
-                            "type": "websocket.disconnect",
-                            "code": event.code,
-                            "reason": event.reason or "",
-                        }
-                    )
-                )
-                if not self.closed:
-                    # Echo close
-                    close_data = self.ws.send(
-                        CloseConnection(code=event.code, reason=event.reason)
-                    )
-                    self.h3.send_data(
-                        self.stream_id, close_data, end_stream=True
-                    )
-                    self.protocol.transmit()
-                    self.closed = True
-
-            elif isinstance(event, Ping):
-                # Respond to ping with pong
-                pong_data = self.ws.send(event.response())
-                self.h3.send_data(self.stream_id, pong_data, end_stream=False)
-                self.protocol.transmit()
-            elif isinstance(event, Pong):
-                # Pong received - ignore for now
-                pass

@@ -33,7 +33,6 @@ dependencies = [
     "h2>=4.3.0",
     "loguru>=0.7.3",
     "rfc3986>=2.0.0",
-    "wsproto>=1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +55,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
     "python-multipart>=0.0.20",
+    "ruff>=0.15.5",
     "websockets>=15.0.1",
 ]
 
