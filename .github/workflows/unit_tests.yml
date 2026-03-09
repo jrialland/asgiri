@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.13", "3.14", "3.15.0-alpha.1"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
     - uses: actions/checkout@v6
@@ -44,21 +44,21 @@ jobs:
       if: matrix.os != 'windows-latest'
       run: uv sync --all-extras --group dev
 
-    # on every platform except ubuntu with python 3.14, run normal tests (exclude slow tests)
+    # on every platform except ubuntu with python 3.13, run normal tests (exclude slow tests)
     - name: Run tests with pytest
-      if : matrix.os != 'ubuntu-latest' || matrix.python-version != '3.14'
+      if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.13'
       run: uv run pytest tests/ -m "not slow" -v --tb=short
 
-    # on ubuntu with python 3.14, run tests with coverage and upload to coveralls
+    # on ubuntu with python 3.13, run tests with coverage and upload to coveralls
     - name: Run tests with coverage
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
       run: |
         uv run coverage run --source=asgiri -m pytest tests/ -m "not slow"
         uv run coverage report
         uv run coverage xml
 
     - name: Upload coverage to Coveralls
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
       uses: coverallsapp/github-action@v2
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
