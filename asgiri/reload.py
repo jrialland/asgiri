@@ -93,8 +93,8 @@ def _module_path_from_app_spec(app_spec: str) -> Path | None:
         module = importlib.import_module(module_path_str)
         if hasattr(module, "__file__") and module.__file__:
             return Path(module.__file__).resolve().parent
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: S110 - import failure falls back gracefully
+        logger.debug("Could not resolve module path for {}: {}", module_path_str, exc)
     return None
 
 

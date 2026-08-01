@@ -56,9 +56,10 @@ class ProxyMiddleware:
         :param pattern: The regex pattern to match request paths.
         """
         self.app = app
-        assert target_url.startswith("http://") or target_url.startswith(
-            "https://"
-        ), "target_url must start with http:// or https://"
+        if not (
+            target_url.startswith("http://") or target_url.startswith("https://")
+        ):
+            raise ValueError("target_url must start with http:// or https://")
         self.target_url = target_url
         self.is_https = target_url.startswith("https://")
         self.pattern = re.compile(pattern)

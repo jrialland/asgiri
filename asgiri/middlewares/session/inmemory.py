@@ -68,8 +68,8 @@ class InMemorySessionBackend(SessionBackend):
                         )
                     for session_id in expired_sessions:
                         self.sessions.pop(session_id, None)
-            except Exception:
-                pass  # ignore errors in scavenger
+            except Exception as exc:  # noqa: S110 - scavenger must never crash
+                logger.debug("Session scavenger encountered an error: {}", exc)
 
     async def get_session(self, session_id: str) -> SessionDict | None:
         session = self.sessions.get(session_id)
