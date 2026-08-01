@@ -5,6 +5,8 @@ usage: asgiri [-h] [--http11 | --http2 | --http3] [--host HOST] [--port PORT]
               [--workers WORKERS] [--selfcert] [--cert CERT] [--key KEY]
               [--wsgi] [--lifespan-policy {enabled,disabled,auto}]
               [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+              [--reload] [--reload-dir RELOAD_DIR] [--reload-ignore RELOAD_IGNORE]
+              [--reload-delay-ms RELOAD_DELAY_MS]
               application
 
 ASGI HTTP server with HTTP/1.1, HTTP/2, and HTTP/3 support
@@ -122,5 +124,21 @@ asgiri mymodule:app
 
 ## Other Options
  * `--log-level={DEBUG,INFO,WARNING,ERROR,CRITICAL}` : set logging level (default: INFO)
+
+## Hot Reload Options (Development Only)
+
+ * `--reload` — enable hot-reload mode. The server restarts automatically when source files change.
+ * `--reload-dir=<path>` — add a directory or file to watch (repeatable). Defaults to the directory of the application module, or the current working directory.
+ * `--reload-ignore=<pattern>` — add an extra ignore pattern (repeatable). The built-in ignore list already excludes `*.pyc`, `__pycache__/`, `.git/`, `.venv/`, `node_modules/`, test/cache directories, and hidden files.
+ * `--reload-delay-ms=<ms>` — debounce delay in milliseconds before triggering a reload (default: 200).
+
+Requirements:
+ * Requires the `watchfiles` package: `pip install asgiri[reload]`.
+ * Incompatible with `--workers > 1` (hot reload is single-process only).
+
+Example:
+```bash
+asgiri --reload --reload-dir ./src --reload-ignore "*.log" myapp:app
+```
 
 **Note:** `mymodule:app` refers to the name of the variable that corresponds to the ASGI application to run

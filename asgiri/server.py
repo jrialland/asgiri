@@ -7,7 +7,7 @@ import ssl
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from aioquic.asyncio import serve
 from aioquic.quic.configuration import QuicConfiguration
@@ -179,6 +179,10 @@ class Server:
         shutdown_timeout: float = 30.0,
         ws_ping_interval: float | None = 20.0,
         ws_ping_timeout: float = 20.0,
+        reload: bool = False,
+        reload_dirs: Sequence[str | Path] | None = None,
+        reload_delay_ms: float | int = 200,
+        reload_ignore_patterns: Sequence[str] | None = None,
     ):
         if ws_ping_interval is not None and ws_ping_interval < 0:
             raise ValueError("ws_ping_interval must be non-negative")
@@ -244,6 +248,12 @@ class Server:
             startup_timeout=lifespan_startup_timeout,
         )
 
+        # Reload metadata (used by the external reloader supervisor)
+        self.reload = reload
+        self.reload_dirs = reload_dirs
+        self.reload_delay_ms = reload_delay_ms
+        self.reload_ignore_patterns = reload_ignore_patterns
+
         # Track temp files for cleanup
         self._temp_cert_file: str | None = None
         self._temp_key_file: str | None = None
@@ -252,6 +262,10 @@ class Server:
         self._original_sigint: Any = None
         self._original_sigterm: Any = None
         self._signal_handler_set = False
+
+        # Loop reference and pending shutdown for request_shutdown()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._pending_shutdown = False
 
         match self.http_version:
             case HttpProtocolVersion.HTTP_1_1:
@@ -307,15 +321,19 @@ class Server:
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown.
-        
+
         This method stores original handlers so they can be restored later.
         """
         if self._signal_handler_set:
             return
-            
+
         try:
-            self._original_sigint = signal.signal(signal.SIGINT, self._signal_handler)
-            self._original_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
+            self._original_sigint = signal.signal(
+                signal.SIGINT, self._signal_handler
+            )
+            self._original_sigterm = signal.signal(
+                signal.SIGTERM, self._signal_handler
+            )
             # On Windows, also handle SIGBREAK (Ctrl+Break)
             if hasattr(signal, "SIGBREAK"):
                 signal.signal(signal.SIGBREAK, self._signal_handler)
@@ -329,7 +347,7 @@ class Server:
         """Restore original signal handlers."""
         if not self._signal_handler_set:
             return
-            
+
         try:
             if self._original_sigint is not None:
                 signal.signal(signal.SIGINT, self._original_sigint)
@@ -340,20 +358,31 @@ class Server:
         except Exception as e:
             logger.debug(f"Could not restore signal handlers: {e}")
 
+    def request_shutdown(self) -> None:
+        """Request a graceful shutdown, safe to call from any thread."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self.should_exit.set)
+        else:
+            # Store pending request; will be applied once a_run starts.
+            self._pending_shutdown = True
+
     def _signal_handler(self, sig: int, frame: Any) -> None:
         """Handle shutdown signals.
-        
+
         This handler is designed to be safe to call from any thread.
         """
         if self._shutdown_in_progress:
-            logger.warning(f"Received signal {sig} during shutdown, forcing exit...")
+            logger.warning(
+                f"Received signal {sig} during shutdown, forcing exit..."
+            )
             # Force immediate exit on second signal
             os._exit(1)
             return
-            
+
         logger.info(f"Received signal {sig}, initiating graceful shutdown...")
         self._shutdown_in_progress = True
-        
+
         # Set the exit event - safe to call from any thread
         if self._should_exit is not None:
             try:
@@ -367,10 +396,10 @@ class Server:
         """Run the server (blocking). Creates an event loop if necessary."""
         # install an event loop if necessary
         loop = install_event_loop()
-        
+
         # Set up signal handlers before starting
         self._setup_signal_handlers()
-        
+
         try:
             loop.run_until_complete(self.a_run())
         except KeyboardInterrupt:
@@ -378,7 +407,7 @@ class Server:
         finally:
             # Restore signal handlers
             self._restore_signal_handlers()
-            
+
             # Ensure the loop is properly closed
             pending = asyncio.all_tasks(loop)
             for task in pending:
@@ -401,10 +430,15 @@ class Server:
             )
 
         loop = asyncio.get_running_loop()
+        self._loop = loop
 
         # Ensure the shutdown event exists now that we have an event loop
         if self._should_exit is None:
             self._should_exit = asyncio.Event()
+
+        if self._pending_shutdown:
+            loop.call_soon(self.should_exit.set)
+            self._pending_shutdown = False
 
         try:
             # Start lifespan
@@ -447,8 +481,7 @@ class Server:
                 # Wait for existing connections with timeout
                 try:
                     await asyncio.wait_for(
-                        tcp_server.wait_closed(),
-                        timeout=self.shutdown_timeout
+                        tcp_server.wait_closed(), timeout=self.shutdown_timeout
                     )
                 except asyncio.TimeoutError:
                     logger.warning(

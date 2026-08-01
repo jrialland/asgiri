@@ -589,3 +589,21 @@ async def test_http2_with_httpx_client(unused_port: int):
         except Exception:
             # If httpx doesn't support plain HTTP/2, that's expected
             pass
+
+
+def test_server_request_shutdown_stops_event_loop(unused_port):
+    from tests.app import app
+
+    server = Server(app=app, host="127.0.0.1", port=unused_port)
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+    # Wait until the event loop is running
+    for _ in range(50):
+        if server._loop is not None:
+            break
+        time.sleep(0.01)
+    assert server._loop is not None
+    server.request_shutdown()
+    server_thread.join(timeout=5)
+    assert not server_thread.is_alive()
