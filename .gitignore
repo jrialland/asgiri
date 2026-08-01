@@ -15,8 +15,7 @@ wheels/
 # Cache and logs
 __pypackages__/
 *.log
-.mypy_cache/
-.pytest_cache/
+.*_cache/
 .coverage
 htmlcov/
 .tox/
