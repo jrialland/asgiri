@@ -15,15 +15,15 @@ class MongoDBSessionBackend(SessionBackend):
             {"$set": session},
             upsert=True
         )
-    async def touch_session(self, session: SessionDict) -> None:
-        session.last_touched = datetime.datetime.now(tz=datetime.timezone.utc)
+    async def touch_session(self, session_id: str) -> None:
+        last_touched = datetime.datetime.now(tz=datetime.timezone.utc)
         await self.collection.update_one(
-            {"session_id": session.session_id},
-            {"$set": {"last_touched": session.last_touched}}
+            {"session_id": session_id},
+            {"$set": {"last_touched": last_touched}}
         )
 
-    async def delete_session(self, session: SessionDict) -> None:
-        await self.collection.delete_one({"session_id": session.session_id})
+    async def delete_session(self, session_id: str) -> None:
+        await self.collection.delete_one({"session_id": session_id})
 
     async def get_session(self, session_id: str) -> SessionDict | None:
         data = await self.collection.find_one({"session_id": session_id})

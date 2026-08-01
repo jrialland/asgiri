@@ -74,9 +74,9 @@ class InMemorySessionBackend(SessionBackend):
     async def get_session(self, session_id: str) -> SessionDict | None:
         session = self.sessions.get(session_id)
         if session:
-            if (
-                datetime.datetime.now(tz=datetime.timezone.utc)
-                - session.created_at
+            created_at = session.created_at
+            if created_at is not None and (
+                datetime.datetime.now(tz=datetime.timezone.utc) - created_at
             ).total_seconds() <= self.max_age:
                 return session
             else:
@@ -85,17 +85,21 @@ class InMemorySessionBackend(SessionBackend):
         return None
 
     async def save_session(self, session: SessionDict) -> None:
+        assert session.session_id is not None
         session.created_at = datetime.datetime.now(tz=datetime.timezone.utc)
         session.last_touched = session.created_at
         with self.lock:
             self.sessions[session.session_id] = session
 
-    async def touch_session(self, session: SessionDict) -> None:
-        session.last_touched = datetime.datetime.now(tz=datetime.timezone.utc)
+    async def touch_session(self, session_id: str) -> None:
+        last_touched = datetime.datetime.now(tz=datetime.timezone.utc)
         with self.lock:
-            self.sessions[session.session_id] = session
+            session = self.sessions.get(session_id)
+            if session is not None:
+                session.last_touched = last_touched
 
     async def delete_session(self, session_id: str) -> None:
         if session_id in self.sessions:
             with self.lock:
                 self.sessions.pop(session_id, None)
+

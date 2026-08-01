@@ -84,8 +84,8 @@ class DatabaseSessionBackend(SessionBackend):
             )
             conn.commit()
 
-    async def touch_session(self, session: SessionDict) -> None:
-        session.last_touched = datetime.datetime.now(tz=datetime.timezone.utc)
+    async def touch_session(self, session_id: str) -> None:
+        last_touched = datetime.datetime.now(tz=datetime.timezone.utc)
         with self._connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -94,7 +94,7 @@ class DatabaseSessionBackend(SessionBackend):
                 SET last_touched = ?
                 WHERE session_id = ?
             """,
-                (session.last_touched, session.session_id),
+                (last_touched, session_id),
             )
             conn.commit()
 
