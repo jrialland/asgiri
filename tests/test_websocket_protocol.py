@@ -24,6 +24,7 @@ from asgiri.proto.websocket_frames import (
     encode_text_frame,
     parse_close_frame,
 )
+from asgiri.proto.websocket_handler import WebSocketHandler
 from asgiri.proto.websocket_http11 import (
     WebSocketHTTP11Handler,
     generate_accept_key,
@@ -468,12 +469,188 @@ class TestWebSocketHTTP11Handler:
         """Test that data_received() does nothing when connection is already closed."""
         # Close the connection
         asyncio.run(websocket_handler._close(1000, "Test"))
-        
+
         # Reset transport mock
         mock_transport.write.reset_mock()
-        
+
         # Try to receive data
         websocket_handler.data_received(b"some data")
-        
+
         # No writes should occur
         assert not mock_transport.write.called
+
+
+class TestWebSocketHandlerHeartbeat:
+    """Tests for HTTP/2/3 WebSocket handler heartbeat."""
+
+    @pytest.mark.asyncio
+    async def test_handler_sends_ping(self):
+        sent_frames: list[bytes] = []
+
+        def send_frame(data: bytes) -> None:
+            sent_frames.append(data)
+
+        app = Mock()
+        app.side_effect = RuntimeError("app should not be called")
+
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "3.0"},
+            "http_version": "2",
+            "scheme": "wss",
+            "path": "/ws",
+            "raw_path": b"/ws",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 443),
+            "subprotocols": [],
+            "extensions": {},
+        }
+
+        handler = WebSocketHandler(
+            scope=scope,
+            app=app,
+            send_frame=send_frame,
+            close_stream=lambda: None,
+            ping_interval=0.05,
+            ping_timeout=0.5,
+        )
+        handler._accepted = True
+
+        handler._heartbeat.start()
+        await asyncio.sleep(0.07)
+        handler._heartbeat.stop()
+
+        assert len(sent_frames) == 1
+        # First byte: FIN=1, opcode=PING (0x9) -> 0x89
+        assert sent_frames[0][0] == 0x89
+
+    @pytest.mark.asyncio
+    async def test_handler_closes_on_missing_pong(self):
+        sent_frames: list[bytes] = []
+
+        def send_frame(data: bytes) -> None:
+            sent_frames.append(data)
+
+        app = Mock()
+        app.side_effect = RuntimeError("app should not be called")
+
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "3.0"},
+            "http_version": "2",
+            "scheme": "wss",
+            "path": "/ws",
+            "raw_path": b"/ws",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 443),
+            "subprotocols": [],
+            "extensions": {},
+        }
+
+        handler = WebSocketHandler(
+            scope=scope,
+            app=app,
+            send_frame=send_frame,
+            close_stream=lambda: None,
+            ping_interval=0.05,
+            ping_timeout=0.05,
+        )
+        handler._accepted = True
+
+        handler._heartbeat.start()
+        await asyncio.sleep(0.15)
+        handler._heartbeat.stop()
+
+        assert handler._closed
+        assert handler._close_code == 1001
+
+
+class TestWebSocketHTTP11HandlerHeartbeat:
+    """Tests for HTTP/1.1 WebSocket handler heartbeat."""
+
+    @pytest.mark.asyncio
+    async def test_http11_handler_sends_ping(self):
+        sent_data: list[bytes] = []
+
+        def send_data(data: bytes) -> None:
+            sent_data.append(data)
+
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "3.0"},
+            "http_version": "1.1",
+            "scheme": "ws",
+            "path": "/ws",
+            "raw_path": b"/ws",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 8000),
+            "subprotocols": [],
+            "extensions": {},
+        }
+
+        handler = WebSocketHTTP11Handler(
+            scope=scope,
+            app=Mock(),
+            send_data=send_data,
+            close_connection=lambda: None,
+            websocket_key="dGhlIHNhbXBsZSBub25jZQ==",
+            ping_interval=0.05,
+            ping_timeout=0.5,
+        )
+
+        handler._heartbeat.start()
+        await asyncio.sleep(0.07)
+        handler._heartbeat.stop()
+
+        assert len(sent_data) == 1
+        assert sent_data[0][0] == 0x89
+
+    @pytest.mark.asyncio
+    async def test_http11_handler_closes_on_missing_pong(self):
+        sent_data: list[bytes] = []
+
+        def send_data(data: bytes) -> None:
+            sent_data.append(data)
+
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "3.0"},
+            "http_version": "1.1",
+            "scheme": "ws",
+            "path": "/ws",
+            "raw_path": b"/ws",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 8000),
+            "subprotocols": [],
+            "extensions": {},
+        }
+
+        handler = WebSocketHTTP11Handler(
+            scope=scope,
+            app=Mock(),
+            send_data=send_data,
+            close_connection=lambda: None,
+            websocket_key="dGhlIHNhbXBsZSBub25jZQ==",
+            ping_interval=0.05,
+            ping_timeout=0.05,
+        )
+
+        handler._heartbeat.start()
+        await asyncio.sleep(0.15)
+        handler._heartbeat.stop()
+
+        assert handler._closed
+        assert handler._close_code == 1001
+

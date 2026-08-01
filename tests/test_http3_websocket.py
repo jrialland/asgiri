@@ -41,6 +41,8 @@ def create_mock_protocol(app):
     protocol.webtransport_stream_receivers = {}
     protocol.webtransport_stream_ended = {}
     protocol.websocket_handlers = {}
+    protocol._ws_ping_interval = 20.0
+    protocol._ws_ping_timeout = 20.0
 
     return protocol
 

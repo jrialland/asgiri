@@ -239,6 +239,8 @@ class Http2ServerProtocol(asyncio.Protocol):
         app: ASGI3Application,
         state: dict[str, Any] | None = None,
         advertise_http3: bool = True,
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
     ):
         super().__init__()
         self.server = server
@@ -247,6 +249,8 @@ class Http2ServerProtocol(asyncio.Protocol):
         self.client: tuple[str, int] | None = None
         self.advertise_http3 = advertise_http3
         self.state = state or {}
+        self._ws_ping_interval = ws_ping_interval
+        self._ws_ping_timeout = ws_ping_timeout
 
         # Wrap app to add HTTP/3 advertisement if enabled
         if advertise_http3:
@@ -701,6 +705,8 @@ class Http2ServerProtocol(asyncio.Protocol):
             app=self.app,  # type: ignore[arg-type]
             send_frame=send_frame,
             close_stream=close_stream,
+            ping_interval=self._ws_ping_interval,
+            ping_timeout=self._ws_ping_timeout,
         )
 
         # Store stream as WebSocket

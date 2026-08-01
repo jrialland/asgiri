@@ -180,7 +180,13 @@ class Server:
         http3_port: int | None = None,
         reuse_port: bool = False,
         shutdown_timeout: float = 30.0,
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
     ):
+        if ws_ping_interval is not None and ws_ping_interval < 0:
+            raise ValueError("ws_ping_interval must be non-negative")
+        if ws_ping_timeout < 0:
+            raise ValueError("ws_ping_timeout must be non-negative")
 
         # Ensure app is a single callable (ASGI 3.0)
         # Call once at initialization
@@ -188,6 +194,8 @@ class Server:
         self.host = host
         self.port = port
         self.http_version = http_version or HttpProtocolVersion.AUTO
+        self.ws_ping_interval = ws_ping_interval
+        self.ws_ping_timeout = ws_ping_timeout
 
         # Determine if HTTP/3 should be enabled
         # Auto-enable HTTP/3 only when:
@@ -389,7 +397,10 @@ class Server:
 
         def protocol_factory():
             return self.protocol_cls(
-                server=(self.host or "", self.port), app=self.app
+                server=(self.host or "", self.port),
+                app=self.app,
+                ws_ping_interval=self.ws_ping_interval,
+                ws_ping_timeout=self.ws_ping_timeout,
             )
 
         loop = asyncio.get_running_loop()
@@ -527,6 +538,8 @@ class Server:
                 *args,
                 app=self.app,
                 server=(self.host or "127.0.0.1", self.http3_port),
+                ws_ping_interval=self.ws_ping_interval,
+                ws_ping_timeout=self.ws_ping_timeout,
                 **kwargs,
             )
 

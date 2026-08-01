@@ -1049,7 +1049,7 @@ async def test_request_rate_limiting(unused_port: int):
         successful = sum(
             1
             for r in responses
-            if not isinstance(r, Exception) and r.status_code == 200
+            if isinstance(r, httpx.Response) and r.status_code == 200
         )
 
         # At least some should succeed

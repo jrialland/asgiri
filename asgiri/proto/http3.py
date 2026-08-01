@@ -27,8 +27,8 @@ from asgiref.typing import (
 )
 from loguru import logger
 
-from asgiri.spec import ASGI_SPEC_VERSION
 from asgiri.proto.websocket_handler import WebSocketHandler
+from asgiri.spec import ASGI_SPEC_VERSION
 
 
 class HTTP3ServerProtocol(QuicConnectionProtocol):
@@ -44,11 +44,15 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
         *args: Any,
         app: ASGI3Application,
         server: tuple[str, int],
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self.app = app
         self.server = server
+        self._ws_ping_interval = ws_ping_interval
+        self._ws_ping_timeout = ws_ping_timeout
         self.h3 = H3Connection(self._quic, enable_webtransport=True)
 
         # Track active streams and their state
@@ -213,6 +217,8 @@ class HTTP3ServerProtocol(QuicConnectionProtocol):
                 app=self.app,
                 send_frame=send_frame,
                 close_stream=close_stream,
+                ping_interval=self._ws_ping_interval,
+                ping_timeout=self._ws_ping_timeout,
             )
 
             self.websocket_handlers[stream_id] = handler

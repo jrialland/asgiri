@@ -12,12 +12,15 @@ import asyncio
 import base64
 import hashlib
 import re
-from typing import Callable
+from typing import Callable, cast
 
 from asgiref.typing import (
     ASGI3Application,
+    ASGIReceiveEvent,
+    ASGISendEvent,
     WebSocketAcceptEvent,
     WebSocketCloseEvent,
+    WebSocketConnectEvent,
     WebSocketDisconnectEvent,
     WebSocketReceiveEvent,
     WebSocketScope,
@@ -32,10 +35,12 @@ from .websocket_frames import (
     WebSocketParser,
     encode_binary_frame,
     encode_close_frame,
+    encode_ping_frame,
     encode_pong_frame,
     encode_text_frame,
     parse_close_frame,
 )
+from .websocket_heartbeat import WebSocketHeartbeat
 
 # WebSocket GUID for key validation (RFC 6455)
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -126,6 +131,8 @@ class WebSocketHTTP11Handler:
         send_data: Callable[[bytes], None],
         close_connection: Callable[[], None],
         websocket_key: str,
+        ping_interval: float | None = 20.0,
+        ping_timeout: float = 20.0,
     ):
         """Initialize the WebSocket handler.
 
@@ -135,6 +142,8 @@ class WebSocketHTTP11Handler:
             send_data: Callback to send raw bytes to the client.
             close_connection: Callback to close the underlying connection.
             websocket_key: The Sec-WebSocket-Key from the client request.
+            ping_interval: Seconds between outgoing pings. ``None`` disables pings.
+            ping_timeout: Seconds to wait for a pong after sending a ping.
         """
         self.scope = scope
         self.app = app
@@ -147,7 +156,7 @@ class WebSocketHTTP11Handler:
 
         # Queues for ASGI communication
         self._receive_queue: asyncio.Queue[
-            WebSocketReceiveEvent | WebSocketDisconnectEvent
+            WebSocketConnectEvent | WebSocketReceiveEvent | WebSocketDisconnectEvent
         ] = asyncio.Queue()
         self._send_queue: asyncio.Queue[
             WebSocketAcceptEvent | WebSocketSendEvent | WebSocketCloseEvent
@@ -168,6 +177,14 @@ class WebSocketHTTP11Handler:
         self._message_buffer: list[bytes] = []
         self._message_type: Opcode | None = None
 
+        # Heartbeat / ping-pong keep-alive
+        self._heartbeat = WebSocketHeartbeat(
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
+            send_ping=self._send_ping,
+            close=self._on_ping_timeout,
+        )
+
     async def handle(self) -> None:
         """Start handling the WebSocket connection.
 
@@ -180,7 +197,7 @@ class WebSocketHTTP11Handler:
         logger.debug("WebSocket HTTP/1.1 handler starting")
 
         # Send initial connect event
-        connect_event: WebSocketReceiveEvent = {"type": "websocket.connect", "text": None, "bytes": None}
+        connect_event: WebSocketConnectEvent = {"type": "websocket.connect"}
         await self._receive_queue.put(connect_event)
 
         # Start application task
@@ -188,6 +205,9 @@ class WebSocketHTTP11Handler:
 
         # Start sender task
         self._sender_task = asyncio.create_task(self._sender())
+
+        # Start heartbeat keep-alive
+        self._heartbeat.start()
 
         # Wait for both to complete
         try:
@@ -201,7 +221,11 @@ class WebSocketHTTP11Handler:
         """Run the ASGI application with WebSocket scope."""
         logger.debug("Running ASGI app")
         try:
-            await self.app(self.scope, self._receive, self._send)
+            await self.app(
+                self.scope,
+                self._receive,
+                self._send,
+            )
             logger.debug("ASGI app completed normally")
         except Exception as e:
             # Check if it's a normal WebSocket disconnect
@@ -212,13 +236,17 @@ class WebSocketHTTP11Handler:
                 if not self._closed:
                     await self._close(CloseCode.INTERNAL_ERROR, "Internal server error")
 
-    async def _receive(self) -> WebSocketReceiveEvent | WebSocketDisconnectEvent:
+    async def _receive(self) -> ASGIReceiveEvent:
         """ASGI receive callable."""
         return await self._receive_queue.get()
 
-    async def _send(self, message: WebSocketAcceptEvent | WebSocketSendEvent | WebSocketCloseEvent) -> None:
+    async def _send(self, message: ASGISendEvent) -> None:
         """ASGI send callable."""
-        await self._send_queue.put(message)
+        typed_message = cast(
+            WebSocketAcceptEvent | WebSocketSendEvent | WebSocketCloseEvent,
+            message,
+        )
+        await self._send_queue.put(typed_message)
 
     async def _sender(self) -> None:
         """Process outgoing messages from the application."""
@@ -323,6 +351,9 @@ class WebSocketHTTP11Handler:
         """
         if self._closed:
             return
+
+        # Any incoming frame counts as activity for heartbeat purposes
+        self._heartbeat.record_activity()
 
         try:
             frames = self._parser.receive_data(data)
@@ -464,8 +495,25 @@ class WebSocketHTTP11Handler:
 
         logger.debug(f"WebSocket closed: {code} {reason}")
 
+    def _send_ping(self) -> None:
+        """Send a ping frame to the peer."""
+        if self._closed:
+            return
+        try:
+            self._send_data(encode_ping_frame(b""))
+        except Exception:
+            logger.exception("Failed to send WebSocket ping")
+
+    async def _on_ping_timeout(self) -> None:
+        """Close the connection when a pong response is not received in time."""
+        if not self._closed:
+            await self._close(CloseCode.GOING_AWAY, "Ping timeout")
+
     async def _cleanup(self) -> None:
         """Clean up resources."""
+        # Stop heartbeat first to avoid sending pings during shutdown
+        self._heartbeat.stop()
+
         # Cancel tasks if they're still running
         if self._app_task and not self._app_task.done():
             self._app_task.cancel()

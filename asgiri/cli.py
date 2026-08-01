@@ -167,6 +167,20 @@ Examples:
         help="Set logging level (default: INFO)",
     )
 
+    # WebSocket ping/pong keep-alive
+    parser.add_argument(
+        "--ws-ping-interval",
+        type=float,
+        default=20.0,
+        help="WebSocket ping interval in seconds (0 to disable, default: 20.0)",
+    )
+    parser.add_argument(
+        "--ws-ping-timeout",
+        type=float,
+        default=20.0,
+        help="WebSocket pong timeout in seconds (default: 20.0)",
+    )
+
     # Application specification
     parser.add_argument(
         "application",
@@ -275,6 +289,13 @@ def main(args: list[str] | None = None) -> int:
         # Create server factory function for workers
         def create_and_run_server():
             """Create and run a server instance (used by workers)."""
+            # A --ws-ping-interval of 0 means "disable pings"
+            ws_ping_interval = (
+                parsed_args.ws_ping_interval
+                if parsed_args.ws_ping_interval > 0
+                else None
+            )
+
             server = Server(
                 app=app,
                 host=parsed_args.host,
@@ -288,6 +309,8 @@ def main(args: list[str] | None = None) -> int:
                 reuse_port=(
                     num_workers > 1
                 ),  # Enable SO_REUSEPORT for multiprocessing
+                ws_ping_interval=ws_ping_interval,
+                ws_ping_timeout=parsed_args.ws_ping_timeout,
             )
             try:
                 server.run()

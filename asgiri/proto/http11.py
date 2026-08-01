@@ -100,6 +100,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         ssl: bool = False,
         advertise_http2: bool = True,
         advertise_http3: bool = False,
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
     ):
         """Initialize the HTTP/1.1 server protocol.
         Args:
@@ -107,6 +109,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
            app: The ASGI application to handle requests.
            state: A copy of the namespace passed into the lifespan corresponding to this request. (See Lifespan Protocol)
            ssl: Whether the connection is over SSL.
+           ws_ping_interval: Seconds between outgoing WebSocket pings.
+           ws_ping_timeout: Seconds to wait for a WebSocket pong.
         """
         super().__init__()
         self.server = server
@@ -129,6 +133,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         )
         self.ssl = ssl
         self.headers_received = False  # Track if we've parsed request headers
+        self._ws_ping_interval = ws_ping_interval
+        self._ws_ping_timeout = ws_ping_timeout
 
     @override
     def connection_made(self, transport: asyncio.BaseTransport):
@@ -507,6 +513,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             send_data=send_data,
             close_connection=close_connection,
             websocket_key=websocket_key,
+            ping_interval=self._ws_ping_interval,
+            ping_timeout=self._ws_ping_timeout,
         )
 
         # Replace the protocol on the transport

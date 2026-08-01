@@ -44,6 +44,8 @@ class AutoProtocol(asyncio.Protocol):
         app: ASGI3Application,
         state: dict[str, Any] | None = None,
         ssl: bool = False,
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
     ):
         """Initialize the auto-detecting protocol.
 
@@ -52,12 +54,16 @@ class AutoProtocol(asyncio.Protocol):
             app: The ASGI application to handle requests.
             state: A copy of the namespace passed into the lifespan corresponding to this request.
             ssl: Whether the connection is over SSL (for ALPN negotiation).
+            ws_ping_interval: Seconds between outgoing WebSocket pings.
+            ws_ping_timeout: Seconds to wait for a WebSocket pong.
         """
         super().__init__()
         self.server = server
         self.app = app
         self.state = state or {}
         self.ssl = ssl
+        self._ws_ping_interval = ws_ping_interval
+        self._ws_ping_timeout = ws_ping_timeout
 
         self.transport: asyncio.Transport | None = None
         self.buffer = bytearray()
@@ -142,6 +148,8 @@ class AutoProtocol(asyncio.Protocol):
         self.delegated_protocol = Http2ServerProtocol(
             server=self.server,
             app=self.app,
+            ws_ping_interval=self._ws_ping_interval,
+            ws_ping_timeout=self._ws_ping_timeout,
         )
 
         # Initialize the delegated protocol
@@ -173,6 +181,8 @@ class AutoProtocol(asyncio.Protocol):
             app=wrapped_app,
             state=self.state,
             ssl=self.ssl,
+            ws_ping_interval=self._ws_ping_interval,
+            ws_ping_timeout=self._ws_ping_timeout,
         )
 
         # Initialize the delegated protocol

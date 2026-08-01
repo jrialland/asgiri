@@ -327,3 +327,16 @@ class TestParseArgs:
         args = parse_args(["--key", "key.pem", "myapp:app"])
         assert args.key == "key.pem"
         assert args.cert is None
+
+    def test_parse_websocket_ping_options(self):
+        """Test parsing WebSocket ping interval and timeout options."""
+        args = parse_args(
+            ["--ws-ping-interval", "10", "--ws-ping-timeout", "5", "myapp:app"]
+        )
+        assert args.ws_ping_interval == 10.0
+        assert args.ws_ping_timeout == 5.0
+
+    def test_parse_websocket_ping_disabled(self):
+        """Test that a --ws-ping-interval of 0 disables pings."""
+        args = parse_args(["--ws-ping-interval", "0", "myapp:app"])
+        assert args.ws_ping_interval == 0.0
