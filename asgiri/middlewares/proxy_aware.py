@@ -9,14 +9,16 @@ If no expected proxy headers are present, the middleware rejects the request wit
 """
 
 from typing import cast
+
 from asgiref.typing import (
     ASGI3Application,
-    Scope,
-    HTTPScope,
-    WebSocketScope,
     ASGIReceiveCallable,
     ASGISendCallable,
+    HTTPScope,
+    Scope,
+    WebSocketScope,
 )
+
 
 class ProxyAwareMiddleware:
     """
@@ -111,8 +113,8 @@ class ProxyAwareMiddleware:
     async def _respond_with_400(send: ASGISendCallable) -> None:
         """Send a 400 Bad Request response."""
         from asgiref.typing import (
-            HTTPResponseStartEvent,
             HTTPResponseBodyEvent,
+            HTTPResponseStartEvent,
         )
 
         await send(

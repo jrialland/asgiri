@@ -1,10 +1,12 @@
 """In-memory session backend implementation."""
 
-from . import SessionBackend, SessionDict
 import datetime
 import threading
 import time
+
 from loguru import logger
+
+from . import SessionBackend, SessionDict
 
 
 class InMemorySessionBackend(SessionBackend):
