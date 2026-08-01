@@ -54,9 +54,11 @@ class ProxyAwareMiddleware:
         """
         has_proxy_header = False
         filtered_headers: list[tuple[bytes, bytes]] = []
-        client_host, client_port = scope.get("client", ("", 0))
+        client = scope.get("client")
+        client_host, client_port = client if client else ("", 0)
         scheme = scope.get("scheme", "http")
-        server_host, server_port = scope.get("server", ("", 0))
+        server = scope.get("server")
+        server_host, server_port = server if server else ("", 0)
 
         for key, value in scope["headers"]:
             key_lower = key.lower()
@@ -108,18 +110,27 @@ class ProxyAwareMiddleware:
     @staticmethod
     async def _respond_with_400(send: ASGISendCallable) -> None:
         """Send a 400 Bad Request response."""
+        from asgiref.typing import (
+            HTTPResponseStartEvent,
+            HTTPResponseBodyEvent,
+        )
+
         await send(
-            {
-                "type": "http.response.start",
-                "status": 400,
-                "headers": [(b"content-type", b"text/plain; charset=utf-8")],
-            }
+            HTTPResponseStartEvent(
+                type="http.response.start",
+                status=400,
+                headers=[(b"content-type", b"text/plain; charset=utf-8")],
+                trailers=False,
+            )
         )
         await send(
-            {
-                "type": "http.response.body",
-                "body": f"❌ 400 Bad Request: expected proxy headers are missing.".encode("utf-8"),
-            }
+            HTTPResponseBodyEvent(
+                type="http.response.body",
+                body="❌ 400 Bad Request: expected proxy headers are missing.".encode(
+                    "utf-8"
+                ),
+                more_body=False,
+            )
         )
 
     @staticmethod

@@ -2,10 +2,8 @@
 
 import argparse
 import os
-from unittest.mock import Mock, patch
 
 import pytest
-from asgiref.wsgi import WsgiToAsgi
 
 from asgiri.cli import create_parser, load_application, parse_args
 from asgiri.server import HttpProtocolVersion

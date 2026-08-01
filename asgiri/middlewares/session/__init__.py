@@ -19,6 +19,7 @@ from asgiref.typing import (
     HTTPScope,
     ASGIReceiveCallable,
     ASGISendCallable,
+    HTTPResponseStartEvent,
 )
 from contextvars import ContextVar
 from werkzeug.local import LocalProxy
@@ -174,7 +175,7 @@ class SessionBackend(ABC):
 
 
 # ------------------------------------------------------------------------------
-session_context: ContextVar[SessionDict] = ContextVar(
+session_context: ContextVar[SessionDict | None] = ContextVar(
     "session_context", default=None
 )
 
@@ -183,7 +184,7 @@ session = LocalProxy(session_context)
 
 
 # ------------------------------------------------------------------------------
-class SessionMiddleware(ASGI3Application):
+class SessionMiddleware:
 
     def __init__(
         self,
@@ -231,11 +232,12 @@ class SessionMiddleware(ASGI3Application):
         return headers
 
     def _make_send_wrapper(
-        self, send: ASGISendCallable, scope: HTTPScope, session_id: str
+        self, send: ASGISendCallable, scope: HTTPScope, session_id: str | None
     ) -> ASGISendCallable:
-        async def wrapped_send(message):
+        async def wrapped_send(message: HTTPResponseStartEvent | dict[str, Any]):
             if message["type"] == "http.response.start":
-                session: SessionDict = scope["session"]
+                start_msg = HTTPResponseStartEvent(**message)  # type: ignore[arg-type]
+                session: SessionDict = scope["session"]  # type: ignore[typeddict-item]
                 # If the session is new and modified, save it wit a new session id
                 if session.is_new or not session.is_pristine:
                     session.session_id = await self.backend.create_session_id()
@@ -243,10 +245,10 @@ class SessionMiddleware(ASGI3Application):
                         "Saving new session with ID {}", session.session_id
                     )
                     await self.backend.save_session(session)
-                    message["headers"] = self._add_cookie_to_response(
+                    start_msg["headers"] = self._add_cookie_to_response(
                         scope,
-                        list(message.get("headers", [])),
-                        session.session_id,
+                        list(start_msg.get("headers", [])),
+                        session.session_id or "",
                     )
                 elif session.session_id:
                     # an existing session
@@ -272,9 +274,11 @@ class SessionMiddleware(ASGI3Application):
                                 "Touching session with ID {}",
                                 session.session_id,
                             )
-                            await self.backend.touch_session(session.session_id)
+                            await self.backend.touch_session(
+                                session.session_id or ""
+                            )
                 try:
-                    await send(message)
+                    await send(start_msg if message["type"] == "http.response.start" else message)
                 finally:
                     # mark session as unmodifiable after response start, because headers were already sent
                     session.modifiable = False

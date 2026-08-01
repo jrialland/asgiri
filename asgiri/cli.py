@@ -304,12 +304,12 @@ def _prepare_server(CliConfig: CliConfiguration):
         logger.info(f"Using certificate: {certfile} and key: {keyfile}")
 
     # Convert lifespan policy string to enum
-    lifespan_policy_map = {
+    lifespan_policy_map: dict[str, LifespanPolicy] = {
         "enabled": LifespanPolicy.ENABLED,
         "disabled": LifespanPolicy.DISABLED,
         "auto": LifespanPolicy.AUTO,
     }
-    lifespan_policy = lifespan_policy_map[CliConfig.lifespan_policy]
+    lifespan_policy = lifespan_policy_map[str(CliConfig.lifespan_policy)]
 
     # Determine number of workers
     try:

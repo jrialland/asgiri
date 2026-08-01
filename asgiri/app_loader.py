@@ -56,7 +56,7 @@ def load_application(app_spec: str, wsgi: bool = False) -> ASGI3Application:
     cwd = os.getcwd()
 
     # Ensure cwd is in sys.path
-    if not cwd in sys.path:
+    if cwd not in sys.path:
         logger.debug(f"Adding current working directory '{cwd}' to sys.path")
         sys.path.insert(0, cwd)
 
