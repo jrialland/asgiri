@@ -146,7 +146,7 @@ class Reloader:
         process.start()
         return process
 
-    def _watcher(self, reload_event: multiprocessing.Event) -> None:
+    def _watcher(self, reload_event: "multiprocessing.synchronize.Event") -> None:
         """Run in a thread; signal reload_event when changes are detected."""
         if watch is None:
             logger.error(
@@ -165,7 +165,7 @@ class Reloader:
         try:
             for changes in watch(
                 *dirs,
-                debounce=self.debounce_ms,
+                debounce=int(self.debounce_ms),
                 stop_event=self._shutdown_requested,
             ):
                 for _, raw_path in changes:
@@ -249,10 +249,10 @@ class Reloader:
                                 f"Giving up after {consecutive_failures} "
                                 f"consecutive failures (exit code {exit_code})"
                             )
-                            return exit_code
+                            return exit_code or 1
 
                     if self._shutdown_requested.is_set():
-                        return exit_code
+                        return exit_code or 0
 
                     # Start a new child and watcher.
                     parent_conn, child_conn = multiprocessing.Pipe()

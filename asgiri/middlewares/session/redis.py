@@ -1,7 +1,6 @@
 from . import SessionBackend, SessionDict
 import redis.asyncio as aredis
 from typing import override
-from loguru import logger
 
 
 class RedisSessionBackend(SessionBackend):
@@ -27,8 +26,9 @@ class RedisSessionBackend(SessionBackend):
     async def save_session(self, session: SessionDict) -> None:
         redis_key = self._redis_key(session.session_id)
         await self.client.hset(
-            redis_key, mapping=session.dict(exclude={"session_id"})
-            ex=self.max_age
+            redis_key,
+            mapping=session.dict(exclude={"session_id"}),
+            ex=self.max_age,
         )
 
     @override

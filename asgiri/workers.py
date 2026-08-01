@@ -9,7 +9,7 @@ import multiprocessing
 import os
 import signal
 import sys
-from typing import Callable
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -76,7 +76,7 @@ def run_worker(
 
 def spawn_workers(
     workers: str,
-    target_func: Callable[[], None],
+    target_func: Callable[..., Any],
     args: list = [],
 ) -> None:
     """Spawn multiple worker processes.
@@ -102,7 +102,7 @@ def spawn_workers(
     logger.info(f"Starting {num_workers} worker processes")
 
     # Track worker processes
-    workers: dict[int, multiprocessing.Process] = {}
+    worker_processes: dict[int, multiprocessing.Process] = {}
 
     def start_worker(worker_id: int) -> multiprocessing.Process:
         """Start a single worker process."""
@@ -116,7 +116,7 @@ def spawn_workers(
 
     # Start all workers
     for i in range(num_workers):
-        workers[i] = start_worker(i)
+        worker_processes[i] = start_worker(i)
 
     # Setup signal handlers for graceful shutdown
     shutdown_event = multiprocessing.Event()
@@ -128,13 +128,13 @@ def spawn_workers(
         shutdown_event.set()
 
         # Terminate all workers gracefully
-        for worker_id, process in workers.items():
+        for worker_id, process in worker_processes.items():
             if process.is_alive():
                 logger.info(f"Terminating worker {worker_id}")
                 process.terminate()
 
         # Wait for workers to finish
-        for worker_id, process in workers.items():
+        for worker_id, process in worker_processes.items():
             process.join(timeout=5)
             if process.is_alive():
                 logger.warning(
@@ -153,7 +153,7 @@ def spawn_workers(
     # Monitor workers and restart if needed
     try:
         while not shutdown_event.is_set():
-            for worker_id, process in list(workers.items()):
+            for worker_id, process in list(worker_processes.items()):
                 if not process.is_alive():
                     exit_code = process.exitcode
                     logger.warning(
@@ -161,7 +161,7 @@ def spawn_workers(
                     )
                     if not shutdown_event.is_set():
                         logger.info(f"Restarting worker {worker_id}")
-                        workers[worker_id] = start_worker(worker_id)
+                        worker_processes[worker_id] = start_worker(worker_id)
                     else:
                         # If one worker dies and we're not restarting,
                         # shut down all workers
