@@ -12,7 +12,7 @@ making it easy to integrate with existing applications using starlette or FastAP
 
 import datetime
 from abc import ABC, abstractmethod
-from typing import Literal, Any
+from typing import Literal, Any, Union
 from asgiref.typing import (
     ASGI3Application,
     Scope,
@@ -20,10 +20,43 @@ from asgiref.typing import (
     ASGIReceiveCallable,
     ASGISendCallable,
     HTTPResponseStartEvent,
+    HTTPResponseBodyEvent,
+    HTTPResponseTrailersEvent,
+    HTTPServerPushEvent,
+    HTTPDisconnectEvent,
+    WebSocketAcceptEvent,
+    WebSocketSendEvent,
+    WebSocketResponseStartEvent,
+    WebSocketResponseBodyEvent,
+    WebSocketDisconnectEvent,
+    WebSocketCloseEvent,
+    LifespanStartupCompleteEvent,
+    LifespanShutdownCompleteEvent,
+    LifespanStartupFailedEvent,
+    LifespanShutdownFailedEvent,
 )
 from contextvars import ContextVar
 from werkzeug.local import LocalProxy
 from loguru import logger
+
+
+ASGISendableMessage = Union[
+    HTTPResponseStartEvent,
+    HTTPResponseBodyEvent,
+    HTTPResponseTrailersEvent,
+    HTTPServerPushEvent,
+    HTTPDisconnectEvent,
+    WebSocketAcceptEvent,
+    WebSocketSendEvent,
+    WebSocketResponseStartEvent,
+    WebSocketResponseBodyEvent,
+    WebSocketDisconnectEvent,
+    WebSocketCloseEvent,
+    LifespanStartupCompleteEvent,
+    LifespanShutdownCompleteEvent,
+    LifespanStartupFailedEvent,
+    LifespanShutdownFailedEvent,
+]
 
 
 # ------------------------------------------------------------------------------
@@ -93,6 +126,11 @@ class SessionDict(dict[str, Any]):
         self.is_pristine = False
         return super().setdefault(key, default)
 
+    @property
+    def data(self) -> "SessionDict":
+        """Return the session data dictionary itself for compatibility."""
+        return self
+
     def invalidate(self):
         """Mark the session for invalidation (deletion)"""
         self.invalidate_requested = True
@@ -155,7 +193,7 @@ class SessionBackend(ABC):
         await self.save_session(session)
 
     @abstractmethod
-    async def touch_session(self, session: SessionDict) -> None:
+    async def touch_session(self, session_id: str) -> None:
         """Update the session's last accessed time without modifying its data.
         This method is called to extend the session's validity period.
         It is not called when update_session was called.
@@ -234,9 +272,9 @@ class SessionMiddleware:
     def _make_send_wrapper(
         self, send: ASGISendCallable, scope: HTTPScope, session_id: str | None
     ) -> ASGISendCallable:
-        async def wrapped_send(message: HTTPResponseStartEvent | dict[str, Any]):
+        async def wrapped_send(message: ASGISendableMessage):
             if message["type"] == "http.response.start":
-                start_msg = HTTPResponseStartEvent(**message)  # type: ignore[arg-type]
+                start_msg: HTTPResponseStartEvent = message  # type: ignore[assignment]
                 session: SessionDict = scope["session"]  # type: ignore[typeddict-item]
                 # If the session is new and modified, save it wit a new session id
                 if session.is_new or not session.is_pristine:
@@ -278,12 +316,12 @@ class SessionMiddleware:
                                 session.session_id or ""
                             )
                 try:
-                    await send(start_msg if message["type"] == "http.response.start" else message)
+                    await send(start_msg)
                 finally:
                     # mark session as unmodifiable after response start, because headers were already sent
                     session.modifiable = False
             else:
-                await send(message)
+                await send(message)  # type: ignore[arg-type]
 
         return wrapped_send
 
@@ -302,12 +340,12 @@ class SessionMiddleware:
                     "Found existing session with ID {}",
                     existing_session.session_id,
                 )
-                scope["session"] = existing_session
+                scope["session"] = existing_session  # type: ignore[typeddict-unknown-key]
             else:
-                scope["session"] = await self.backend.create_session()
+                scope["session"] = await self.backend.create_session()  # type: ignore[typeddict-unknown-key]
 
             # assign session to context variable
-            session_context.set(scope["session"])
+            session_context.set(scope["session"])  # type: ignore[typeddict-item]
 
             try:
                 await self.app(

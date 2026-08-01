@@ -1,6 +1,6 @@
 from . import SessionBackend, SessionDict
 import redis.asyncio as aredis
-from typing import override
+from typing import Any, override
 
 
 class RedisSessionBackend(SessionBackend):
@@ -24,31 +24,33 @@ class RedisSessionBackend(SessionBackend):
 
     @override
     async def save_session(self, session: SessionDict) -> None:
+        assert session.session_id is not None
         redis_key = self._redis_key(session.session_id)
+        mapping: dict[str, Any] = dict(session)
+        mapping.pop("session_id", None)
         await self.client.hset(
             redis_key,
-            mapping=session.dict(exclude={"session_id"}),
+            mapping=mapping,
             ex=self.max_age,
         )
 
     @override
-    async def get_session(
-        self, session_id: str, max_age: int
-    ) -> SessionDict | None:
+    async def get_session(self, session_id: str) -> SessionDict | None:
         session_data = await self.client.hgetall(
             self._redis_key(session_id)
         )
         if not session_data:
             return None
-        session = SessionDict(session_id=session_id, **session_data)
+        session = SessionDict(session_id=session_id)
+        session.update(session_data)
         return session
-    
+
     @override
-    async def touch_session(self, session: SessionDict) -> None:
+    async def touch_session(self, session_id: str) -> None:
         await self.client.expire(
-            self._redis_key(session.session_id), self.max_age
+            self._redis_key(session_id), self.max_age
         )
 
     @override
     async def delete_session(self, session_id: str) -> None:
-        await self.redis.delete(self._redis_key(session_id))
+        await self.client.delete(self._redis_key(session_id))

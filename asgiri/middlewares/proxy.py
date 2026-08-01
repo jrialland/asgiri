@@ -21,6 +21,10 @@ from asgiref.typing import (
     WebSocketScope,
     ASGIReceiveCallable,
     ASGISendCallable,
+    HTTPResponseStartEvent,
+    HTTPResponseBodyEvent,
+    WebSocketAcceptEvent,
+    WebSocketSendEvent,
 )
 from loguru import logger
 
@@ -60,7 +64,72 @@ class ProxyMiddleware:
         self.pattern = re.compile(pattern)
         self.http_transport = httpx.AsyncHTTPTransport()
 
-    def match(self, scope: Scope, ws: bool = False) -> str | None:
+    def _forwarded_headers(
+        self, scope: HTTPScope | WebSocketScope
+    ) -> list[tuple[bytes, bytes]]:
+        """
+        Generate forwarded headers for the proxied request.
+        :param scope: The ASGI scope.
+        :return: A list of headers to add to the proxied request.
+        """
+        headers: list[tuple[bytes, bytes]] = []
+        has_forwarded = False
+        client = scope.get("client")
+        client_host, client_port = client if client else ("", 0)
+        scheme = scope.get("scheme", "http")
+        assert isinstance(scheme, str)
+        http_version = scope.get("http_version", "1.1")
+        assert isinstance(http_version, str)
+        raw_path = scope.get("raw_path", b"")
+        assert isinstance(raw_path, bytes)
+        path = scope["path"]
+        for key, value in scope.get("headers", []):
+            if key.startswith(b":"):
+                # Skip pseudo-headers
+                continue
+            if key in {
+                b"x-forwarded-for",
+                b"x-forwarded-proto",
+                b"x-forwarded-port",
+            }:
+                # Skip existing forwarded headers to avoid duplication
+                continue
+            if key == b"forwarded":
+                # Append to existing Forwarded header
+                has_forwarded = True
+                new_value = (
+                    value
+                    + b", "
+                    + f'for="{client_host}:{client_port}"; proto={scheme}'.encode()
+                )
+                headers.append((key, new_value))
+            else:
+                headers.append((key, value))
+
+        headers.append((b"x-forwarded-proto", scheme.encode()))
+        headers.append((b"x-real-ip", client_host.encode()))
+        headers.append((b"x-forwarded-for", client_host.encode()))
+        headers.append((b"x-forwarded-port", str(client_port).encode()))
+        headers.append((b"x-forwarded-path", path.encode()))
+        headers.append((b"x-forwarded-uri", raw_path))
+        headers.append(
+            (
+                b"via",
+                f"HTTP/{http_version} ASGIRI_PROXY".encode(),
+            )
+        )
+        if not has_forwarded:
+            headers.append(
+                (
+                    b"forwarded",
+                    f"for={client_host}; proto={scheme}".encode(),
+                )
+            )
+        return headers
+
+    def match(
+        self, scope: HTTPScope | WebSocketScope, ws: bool = False
+    ) -> str | None:
         """
         Check if the request matches the pattern.
         If it matches, return the target URL to proxy to.
@@ -68,68 +137,19 @@ class ProxyMiddleware:
         :param ws: Whether the request is a websocket request.
         :return: The target URL to proxy to, or None if it doesn't match.
         """
-        m = self.pattern.match(scope["path"][len(scope.get("root_path", "")) :])
-        if m is None:
+        root_path = scope.get("root_path", "")
+        assert isinstance(root_path, str)
+        path = scope["path"]
+        matched = self.pattern.match(path[len(root_path):])
+        if matched is None:
             return None
         scheme = (
             "wss"
             if ws and self.is_https
             else "ws" if ws else "https" if self.is_https else "http"
         )
-        return f"{scheme}://{self.target_url[len('https://' if self.is_https else 'http://'):]}{scope['path']}"
-
-    def _forwarded_headers(self, scope: Scope) -> list[tuple[bytes, bytes]]:
-        """
-        Generate forwarded headers for the proxied request.
-        :param scope: The ASGI scope.
-        :return: A list of headers to add to the proxied request.
-        """
-        headers = []
-        has_forwarded = False
-        client_host, client_port = scope.get("client", ("", 0))
-        for key, value in scope["headers"]:  # type: ignore
-            if key[0] == b":":
-                # Skip pseudo-headers
-                continue
-            match key:
-                case (
-                    b"x-forwarded-for"
-                    | b"x-forwarded-proto"
-                    | b"x-forwarded-port"
-                ):
-                    # Skip existing forwarded headers to avoid duplication
-                    continue
-                case b"forwarded":
-                    # Append to existing Forwarded header
-                    has_forwarded = True
-                    value += b", "
-                    value += f'for="{client_host}:{client_port}"; proto={scope.get("scheme", "http")}'.encode()
-                    headers.append((key, value))
-                case _:
-                    headers.append((key, value))
-
-        headers.append(
-            (b"x-forwarded-proto", scope.get("scheme", "http").encode())
-        )
-        headers.append((b"x-real-ip", client_host.encode()))
-        headers.append((b"x-forwarded-for", client_host.encode()))
-        headers.append((b"x-forwarded-port", str(client_port).encode()))
-        headers.append((b"x-forwarded-path", scope["path"].encode()))
-        headers.append((b"x-forwarded-uri", scope["raw_path"]))
-        headers.append(
-            (
-                b"via",
-                f"HTTP/{scope.get('http_version', '1.1')} ASGIRI_PROXY".encode(),
-            )
-        )
-        if not has_forwarded:
-            headers.append(
-                (
-                    b"forwarded",
-                    f"for={client_host}; proto={scope.get('scheme', 'http')}".encode(),
-                )
-            )
-        return headers
+        target = self.target_url
+        return f"{scheme}://{target[len('https://' if self.is_https else 'http://'):]}{path}"
 
     async def websocket_proxy(
         self,
@@ -153,8 +173,8 @@ class ProxyMiddleware:
 
         # extract subprotocols from the headers
         headers = self._forwarded_headers(scope)
-        subprotocols = []
-        for header, value in headers:  # type: ignore
+        subprotocols: list[str] = []
+        for header, value in headers:
             if header == b"sec-websocket-protocol":
                 subprotocols = [v.strip() for v in value.decode().split(",")]
 
@@ -174,44 +194,49 @@ class ProxyMiddleware:
 
         # connect to the proxied location websocket server
         async with websockets.connect(
-            target_url, subprotocols=subprotocols, extra_headers=headers
+            target_url,
+            subprotocols=cast(list[websockets.typing.Subprotocol], subprotocols) or None,
+            extra_headers=headers,
         ) as websocket:
 
             await send(
-                {
-                    "type": "websocket.accept",
-                    "subprotocol": websocket.subprotocol,
-                }
+                WebSocketAcceptEvent(
+                    type="websocket.accept",
+                    subprotocol=websocket.subprotocol,
+                    headers=[],
+                )
             )
 
             async def forward_to_client():
                 """for each message received from the proxied location, send it to the client"""
                 while True:
                     msg = await websocket.recv()
-                    client_msg: dict = {"type": "websocket.send"}
+                    client_msg: WebSocketSendEvent
                     if isinstance(msg, str):
-                        client_msg["text"] = msg
+                        client_msg = WebSocketSendEvent(
+                            type="websocket.send", text=msg
+                        )
                     else:
-                        client_msg["bytes"] = msg
+                        client_msg = WebSocketSendEvent(
+                            type="websocket.send", bytes=msg
+                        )
                     await send(client_msg)
 
             async def forward_to_server():
                 """for each message received from the client, send it to the proxied location"""
                 while True:
                     message = await receive()
-                    match message["type"]:
-                        case "websocket.receive":
-                            if "bytes" in message:
-                                await websocket.send(
-                                    message["bytes"], text=False
-                                )
-                            else:
-                                await websocket.send(
-                                    message.get("text", ""), text=True
-                                )
-                        case "websocket.close":
-                            await websocket.close()
-                            return
+                    if message["type"] == "websocket.receive":
+                        if "bytes" in message:
+                            await websocket.send(
+                                message["bytes"], text=False  # type: ignore[arg-type]
+                            )
+                        else:
+                            await websocket.send(
+                                message.get("text", ""), text=True
+                            )
+                    elif message["type"] == "websocket.disconnect":
+                        break
 
             await asyncio.gather(forward_to_client(), forward_to_server())
 
@@ -262,37 +287,39 @@ class ProxyMiddleware:
             )
 
             # send the response back to the client
+            response_headers = [
+                (key.encode(), value.encode())
+                for key, value in response.headers.items()
+                if key.lower()
+                not in (
+                    "transfer-encoding",
+                    "content-encoding",
+                )  # httpx handles these
+            ]
             await send(
-                {
-                    "type": "http.response.start",
-                    "status": response.status_code,
-                    "headers": [
-                        (key.encode(), value.encode())
-                        for key, value in response.headers.items()
-                        if key.lower()
-                        not in (
-                            "transfer-encoding",
-                            "content-encoding",
-                        )  # httpx handles these
-                    ],
-                }
+                HTTPResponseStartEvent(
+                    type="http.response.start",
+                    status=response.status_code,
+                    headers=response_headers,
+                    trailers=False,
+                )
             )
 
             async for chunk in response.aiter_bytes():
                 await send(
-                    {
-                        "type": "http.response.body",
-                        "body": chunk,
-                        "more_body": True,
-                    }
+                    HTTPResponseBodyEvent(
+                        type="http.response.body",
+                        body=chunk,
+                        more_body=True,
+                    )
                 )
 
             await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"",
-                    "more_body": False,
-                }
+                HTTPResponseBodyEvent(
+                    type="http.response.body",
+                    body=b"",
+                    more_body=False,
+                )
             )
 
     async def __call__(
