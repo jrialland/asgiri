@@ -10,6 +10,7 @@ from .server import HttpProtocolVersion, LifespanPolicy, Server
 from .ssl_utils import generate_self_signed_cert
 from .workers import compute_workers_count, spawn_workers
 from .app_loader import load_application
+from .reload import Reloader, resolve_reload_dirs
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -125,6 +126,32 @@ Examples:
         help="WebSocket pong timeout in seconds (default: 20.0)",
     )
 
+    # Hot reload options (development only)
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable hot-reload mode in development (single-process only)",
+    )
+    parser.add_argument(
+        "--reload-dir",
+        action="append",
+        dest="reload_dirs",
+        help="Directory or file path to watch for changes (repeatable). "
+        "Defaults to the app module's directory.",
+    )
+    parser.add_argument(
+        "--reload-ignore",
+        action="append",
+        dest="reload_ignore_patterns",
+        help="Extra ignore pattern for reload watcher (repeatable)",
+    )
+    parser.add_argument(
+        "--reload-delay-ms",
+        type=int,
+        default=200,
+        help="Reload debounce delay in milliseconds (default: 200)",
+    )
+
     # Application specification
     parser.add_argument(
         "application",
@@ -156,6 +183,10 @@ class CliConfiguration:
         application: str,
         ws_ping_interval: float,
         ws_ping_timeout: float,
+        reload: bool,
+        reload_dirs: list[str] | None,
+        reload_ignore_patterns: list[str] | None,
+        reload_delay_ms: int,
     ):
 
         self.host = host
@@ -171,6 +202,10 @@ class CliConfiguration:
         self.application = application
         self.ws_ping_interval = ws_ping_interval
         self.ws_ping_timeout = ws_ping_timeout
+        self.reload = reload
+        self.reload_dirs = reload_dirs
+        self.reload_ignore_patterns = reload_ignore_patterns
+        self.reload_delay_ms = reload_delay_ms
 
 
 def parse_args(args: list[str] | None = None) -> CliConfiguration:
@@ -191,6 +226,10 @@ def parse_args(args: list[str] | None = None) -> CliConfiguration:
         application=parsed_args.application,
         ws_ping_interval=parsed_args.ws_ping_interval,
         ws_ping_timeout=parsed_args.ws_ping_timeout,
+        reload=parsed_args.reload,
+        reload_dirs=parsed_args.reload_dirs,
+        reload_ignore_patterns=parsed_args.reload_ignore_patterns,
+        reload_delay_ms=parsed_args.reload_delay_ms,
     )
 
     is_tls = (
@@ -202,6 +241,10 @@ def parse_args(args: list[str] | None = None) -> CliConfiguration:
     # default values for http port
     if config.port == -1:
         config.port = 8443 if is_tls else 8000
+
+    if config.reload and parsed_args.workers != "1":
+        logger.error("Cannot use --reload with --workers > 1")
+        sys.exit(1)
 
     # The --workers argument does not work for Windows
     if os.name == "nt":
@@ -215,9 +258,8 @@ def parse_args(args: list[str] | None = None) -> CliConfiguration:
     return config
 
 
-def worker_process(CliConfig: CliConfiguration) -> int:
-    """Function to run in each worker process."""
-
+def _prepare_server(CliConfig: CliConfiguration):
+    """Load app, configure TLS, and return (create_server_func, run_server_func)."""
     # Configure logging
     logger.remove()  # Remove default handler
     logger.add(
@@ -276,8 +318,8 @@ def worker_process(CliConfig: CliConfiguration) -> int:
         logger.error(f"Invalid --workers value: {e}")
         return 1
 
-    def create_and_run_server() -> None:
-        """Create and run a server instance (used by workers)."""
+    def create_server() -> Server:
+        """Create a server instance (without running it)."""
         # A --ws-ping-interval of 0 means "disable pings"
         ws_ping_interval = (
             CliConfig.ws_ping_interval
@@ -285,7 +327,7 @@ def worker_process(CliConfig: CliConfiguration) -> int:
             else None
         )
 
-        server = Server(
+        return Server(
             app=app,
             host=CliConfig.host,
             port=CliConfig.port,
@@ -298,7 +340,15 @@ def worker_process(CliConfig: CliConfiguration) -> int:
             reuse_port=(num_workers > 1),
             ws_ping_interval=ws_ping_interval,
             ws_ping_timeout=CliConfig.ws_ping_timeout,
+            reload=CliConfig.reload,
+            reload_dirs=CliConfig.reload_dirs,
+            reload_delay_ms=CliConfig.reload_delay_ms,
+            reload_ignore_patterns=CliConfig.reload_ignore_patterns,
         )
+
+    def create_and_run_server() -> Server:
+        """Create and run a server instance (used by workers)."""
+        server = create_server()
         try:
             server.run()
         except KeyboardInterrupt:
@@ -306,6 +356,7 @@ def worker_process(CliConfig: CliConfiguration) -> int:
         except Exception as e:
             logger.exception(f"Server error: {e}")
             raise
+        return server
 
     protocol_str = CliConfig.protocol.value
     tls_str = "with TLS" if (CliConfig.selfcert or certfile) else "without TLS"
@@ -321,14 +372,86 @@ def worker_process(CliConfig: CliConfiguration) -> int:
             f"({protocol_str}, {tls_str}, lifespan: {CliConfig.lifespan_policy})"
         )
 
-    # Run with workers
+    return create_server, create_and_run_server
+
+
+def worker_process(CliConfig: CliConfiguration) -> int:
+    """Function to run in each worker process."""
+    result = _prepare_server(CliConfig)
+    if isinstance(result, int):
+        return result
+    _, create_and_run_server = result
     spawn_workers(CliConfig.workers, create_and_run_server)
     return 0
+
+
+def reloadable_worker_process(CliConfig: CliConfiguration, conn) -> int:
+    """Worker process that serves and listens for reload/shutdown commands."""
+    import threading as _threading
+
+    result = _prepare_server(CliConfig)
+    if isinstance(result, int):
+        return result
+    create_server, create_and_run_server = result
+
+    server = create_server()
+
+    def pipe_listener():
+        try:
+            message = conn.recv()
+            if message in ("reload", "shutdown"):
+                logger.info(f"{message.capitalize()} requested by supervisor")
+                server.request_shutdown()
+        except EOFError:
+            pass
+        except Exception as e:
+            logger.debug(f"Pipe listener error: {e}")
+
+    listener = _threading.Thread(target=pipe_listener, daemon=True)
+    listener.start()
+
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        logger.info("Server interrupted by user")
+    except Exception as e:
+        logger.exception(f"Server error: {e}")
+        raise
+    return 0
+
+
+def run_with_reloader(config: CliConfiguration) -> int:
+    """Run the server under the hot-reload supervisor."""
+    try:
+        import watchfiles  # noqa: F401
+    except ImportError:
+        logger.error(
+            "Hot reload requires the 'watchfiles' package. "
+            "Install it with: pip install asgiri[reload]"
+        )
+        return 1
+
+    watch_dirs = resolve_reload_dirs(
+        config.application,
+        config.reload_dirs,
+    )
+    logger.info(f"Watching directories for reload: {watch_dirs}")
+
+    reloader = Reloader(
+        watch_dirs=watch_dirs,
+        debounce_ms=config.reload_delay_ms,
+        ignore_patterns=config.reload_ignore_patterns,
+        max_restarts=3,
+        shutdown_timeout=30.0,
+    )
+    return reloader.run(reloadable_worker_process, (config,))
 
 
 def main(args: list[str] | None = None) -> int:
     """Main entry point for the asgiri CLI."""
     # Parse command-line arguments
     config: CliConfiguration = parse_args(args)
+    if config.reload:
+        return run_with_reloader(config)
     spawn_workers(config.workers, worker_process, [config])
     return 0

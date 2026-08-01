@@ -96,6 +96,44 @@ class TestCreateParser:
         assert args.selfcert is True
 
 
+class TestReloadCli:
+    """Tests for hot-reload CLI options."""
+
+    def test_parse_reload_flag(self):
+        """Test parsing --reload flag."""
+        args = parse_args(["--reload", "myapp:app"])
+        assert args.reload is True
+        assert args.reload_delay_ms == 200
+        assert args.reload_dirs is None
+        assert args.reload_ignore_patterns is None
+
+    def test_parse_reload_options(self):
+        """Test parsing all reload options."""
+        args = parse_args(
+            [
+                "--reload",
+                "--reload-dir",
+                "src",
+                "--reload-dir",
+                "lib",
+                "--reload-ignore",
+                "*.log",
+                "--reload-delay-ms",
+                "300",
+                "myapp:app",
+            ]
+        )
+        assert args.reload is True
+        assert args.reload_dirs == ["src", "lib"]
+        assert args.reload_ignore_patterns == ["*.log"]
+        assert args.reload_delay_ms == 300
+
+    def test_reload_incompatible_with_workers(self):
+        """Test that --reload cannot be used with --workers > 1."""
+        with pytest.raises(SystemExit):
+            parse_args(["--reload", "--workers", "2", "myapp:app"])
+
+
 class TestParseArgs:
     """Tests for parse_args function."""
 
