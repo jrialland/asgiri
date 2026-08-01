@@ -9,7 +9,7 @@ Usage:
 """
 
 import io
-from locust import task, between, events
+from locust import task, between
 from locust.contrib.fasthttp import FastHttpUser
 
 

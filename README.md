@@ -12,11 +12,6 @@
 
 A high-performance ASGI server implementation supporting HTTP/1.1, HTTP/2, and HTTP/3 protocols with automatic protocol detection and seamless switching.
 
-> **⚠️ Early Stage Project**  
-> Asgiri is a relatively new project and has not been extensively tested in production environments. While we strive for stability and correctness, we recommend thorough testing in your specific use case before deploying to production. Contributions, bug reports, and feedback are highly appreciated as we work toward production readiness.
-
-See [PROJECT_STATUS.md](./PROJECT_STATUS.md)
-
 ## Features
 
 - **Multi-Protocol Support**: Handles HTTP/1.1, HTTP/2, and HTTP/3 on the same port

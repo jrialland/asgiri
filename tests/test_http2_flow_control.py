@@ -10,7 +10,7 @@ This module tests:
 """
 
 import asyncio
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import h2.connection
 import h2.events

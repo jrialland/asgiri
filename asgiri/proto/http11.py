@@ -19,7 +19,7 @@ from loguru import logger
 from asgiri.middlewares.headers import wrap_with_advertisements
 from asgiri.spec import ASGI_SPEC_VERSION
 
-from .websocket import WebSocketProtocol
+from .websocket_http11 import WebSocketHTTP11Handler
 
 # Security limits for request processing
 MAX_REQUEST_LINE_LENGTH = 8192  # 8KB - common limit for request line
@@ -100,6 +100,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         ssl: bool = False,
         advertise_http2: bool = True,
         advertise_http3: bool = False,
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
     ):
         """Initialize the HTTP/1.1 server protocol.
         Args:
@@ -107,6 +109,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
            app: The ASGI application to handle requests.
            state: A copy of the namespace passed into the lifespan corresponding to this request. (See Lifespan Protocol)
            ssl: Whether the connection is over SSL.
+           ws_ping_interval: Seconds between outgoing WebSocket pings.
+           ws_ping_timeout: Seconds to wait for a WebSocket pong.
         """
         super().__init__()
         self.server = server
@@ -129,6 +133,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         )
         self.ssl = ssl
         self.headers_received = False  # Track if we've parsed request headers
+        self._ws_ping_interval = ws_ping_interval
+        self._ws_ping_timeout = ws_ping_timeout
 
     @override
     def connection_made(self, transport: asyncio.BaseTransport):
@@ -453,10 +459,8 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         """
         if self.transport is None:
             raise RuntimeError("Transport is None in WebSocket upgrade")
-        if self.conn is None:
-            raise RuntimeError("Connection is None in WebSocket upgrade")
 
-        # Create WebSocket scope first (before we send any response)
+        # Create WebSocket scope
         url: rfc3986.ParseResult = rfc3986.urlparse(request.target.decode())
 
         # Extract headers
@@ -469,6 +473,9 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             subprotocols = [
                 p.strip().decode() for p in ws_protocol_header.split(b",")
             ]
+
+        # Extract WebSocket key
+        websocket_key = headers_dict.get(b"sec-websocket-key", b"").decode()
 
         scope: WebSocketScope = {
             "type": "websocket",
@@ -488,27 +495,33 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             "extensions": {"websocket.http.response": {}},
         }
 
-        # Build the raw HTTP request for wsproto
-        # wsproto needs to see the full HTTP request to complete its handshake
-        request_line = f"{request.method.decode()} {request.target.decode()} HTTP/{request.http_version.decode()}\r\n".encode()
-        headers_bytes = b"".join(
-            [
-                f"{name.decode()}: {value.decode()}\r\n".encode()
-                for name, value in request.headers
-            ]
-        )
-        raw_request = request_line + headers_bytes + b"\r\n"
+        # Create callbacks for sending data and closing connection
+        def send_data(data: bytes) -> None:
+            """Send raw bytes to the client."""
+            if self.transport and not self.transport.is_closing():
+                self.transport.write(data)
 
-        # Create WebSocket protocol handler - this will handle the handshake
-        ws_protocol = WebSocketProtocol(
-            self.transport, scope, self.app, raw_request
+        def close_connection() -> None:
+            """Close the underlying connection."""
+            if self.transport and not self.transport.is_closing():
+                self.transport.close()
+
+        # Create WebSocket handler using our pure Python implementation
+        ws_handler = WebSocketHTTP11Handler(
+            scope=scope,
+            app=self.app,
+            send_data=send_data,
+            close_connection=close_connection,
+            websocket_key=websocket_key,
+            ping_interval=self._ws_ping_interval,
+            ping_timeout=self._ws_ping_timeout,
         )
 
         # Replace the protocol on the transport
-        self.transport.set_protocol(ws_protocol)  # type: ignore[arg-type]
+        self.transport.set_protocol(ws_handler)  # type: ignore[arg-type]
 
         # Start WebSocket handling
-        asyncio.create_task(ws_protocol.handle())
+        asyncio.create_task(ws_handler.handle())
 
     def _handle_h2c_upgrade(self, request: h11.Request):
         """Handle an HTTP/2 upgrade request (h2c).
@@ -538,7 +551,7 @@ class HTTP11ServerProtocol(asyncio.Protocol):
             missing_padding = len(http2_settings) % 4
             if missing_padding:
                 http2_settings += b"=" * (4 - missing_padding)
-            settings_payload = base64.urlsafe_b64decode(http2_settings)
+            _ = base64.urlsafe_b64decode(http2_settings)  # Validate but don't use yet
         except Exception as e:
             logger.warning(f"Failed to decode HTTP2-Settings: {e}")
             # Send 400 Bad Request as raw bytes
@@ -586,9 +599,6 @@ class HTTP11ServerProtocol(asyncio.Protocol):
         # We need to manually create stream 1 for the upgrade request
 
         # Build pseudo-headers for the HTTP/2 request
-        url = rfc3986.urlparse(request.target.decode())
-
-        # Build pseudo-headers
         h2_headers = [
             (b":method", request.method),
             (b":scheme", b"https" if self.ssl else b"http"),

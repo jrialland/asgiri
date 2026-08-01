@@ -11,7 +11,7 @@ This module tests:
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import h2.connection
 import h2.events
@@ -283,8 +283,6 @@ async def test_sender_handles_stream_errors():
     sender = Sender(conn=conn, transport=transport, stream_id=1)
 
     # Mock send_headers to raise an exception
-    original_send_headers = conn.send_headers
-
     def mock_send_headers(*args, **kwargs):
         raise h2.exceptions.StreamClosedError("Stream already closed")
 

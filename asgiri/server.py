@@ -7,6 +7,7 @@ import ssl
 import tempfile
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from aioquic.asyncio import serve
 from aioquic.quic.configuration import QuicConfiguration
@@ -175,7 +176,14 @@ class Server:
         enable_http3: bool | None = None,
         http3_port: int | None = None,
         reuse_port: bool = False,
+        shutdown_timeout: float = 30.0,
+        ws_ping_interval: float | None = 20.0,
+        ws_ping_timeout: float = 20.0,
     ):
+        if ws_ping_interval is not None and ws_ping_interval < 0:
+            raise ValueError("ws_ping_interval must be non-negative")
+        if ws_ping_timeout < 0:
+            raise ValueError("ws_ping_timeout must be non-negative")
 
         # Ensure app is a single callable (ASGI 3.0)
         # Call once at initialization
@@ -183,6 +191,8 @@ class Server:
         self.host = host
         self.port = port
         self.http_version = http_version or HttpProtocolVersion.AUTO
+        self.ws_ping_interval = ws_ping_interval
+        self.ws_ping_timeout = ws_ping_timeout
 
         # Determine if HTTP/3 should be enabled
         # Auto-enable HTTP/3 only when:
@@ -224,7 +234,10 @@ class Server:
         self.cert_data = cert_data
         self.key_data = key_data
         self.reuse_port = reuse_port
-        self.should_exit: asyncio.Event | None = None
+        self.shutdown_timeout = shutdown_timeout
+        # should_exit is created lazily when we have an event loop
+        self._should_exit: asyncio.Event | None = None
+        self._shutdown_in_progress = False
         self.lifespan_handler = LifespanHandler(
             app,
             lifespan or LifespanPolicy.AUTO,
@@ -234,6 +247,11 @@ class Server:
         # Track temp files for cleanup
         self._temp_cert_file: str | None = None
         self._temp_key_file: str | None = None
+
+        # Store signal handlers for restoration
+        self._original_sigint: Any = None
+        self._original_sigterm: Any = None
+        self._signal_handler_set = False
 
         match self.http_version:
             case HttpProtocolVersion.HTTP_1_1:
@@ -276,18 +294,91 @@ class Server:
             )
             logger.info("SSL context created successfully")
 
+    @property
+    def should_exit(self) -> asyncio.Event:
+        """Get or create the exit event."""
+        if self._should_exit is None:
+            try:
+                self._should_exit = asyncio.Event()
+            except RuntimeError:
+                # No event loop running yet - will be created in a_run()
+                pass
+        return self._should_exit  # type: ignore
+
+    def _setup_signal_handlers(self) -> None:
+        """Set up signal handlers for graceful shutdown.
+        
+        This method stores original handlers so they can be restored later.
+        """
+        if self._signal_handler_set:
+            return
+            
+        try:
+            self._original_sigint = signal.signal(signal.SIGINT, self._signal_handler)
+            self._original_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
+            # On Windows, also handle SIGBREAK (Ctrl+Break)
+            if hasattr(signal, "SIGBREAK"):
+                signal.signal(signal.SIGBREAK, self._signal_handler)
+            self._signal_handler_set = True
+            logger.debug("Signal handlers registered")
+        except ValueError:
+            # signal only works in main thread - this is expected in tests
+            logger.debug("Signal handlers not registered (not in main thread)")
+
+    def _restore_signal_handlers(self) -> None:
+        """Restore original signal handlers."""
+        if not self._signal_handler_set:
+            return
+            
+        try:
+            if self._original_sigint is not None:
+                signal.signal(signal.SIGINT, self._original_sigint)
+            if self._original_sigterm is not None:
+                signal.signal(signal.SIGTERM, self._original_sigterm)
+            self._signal_handler_set = False
+            logger.debug("Signal handlers restored")
+        except Exception as e:
+            logger.debug(f"Could not restore signal handlers: {e}")
+
+    def _signal_handler(self, sig: int, frame: Any) -> None:
+        """Handle shutdown signals.
+        
+        This handler is designed to be safe to call from any thread.
+        """
+        if self._shutdown_in_progress:
+            logger.warning(f"Received signal {sig} during shutdown, forcing exit...")
+            # Force immediate exit on second signal
+            os._exit(1)
+            return
+            
+        logger.info(f"Received signal {sig}, initiating graceful shutdown...")
+        self._shutdown_in_progress = True
+        
+        # Set the exit event - safe to call from any thread
+        if self._should_exit is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.call_soon_threadsafe(self._should_exit.set)
+            except RuntimeError:
+                # No loop running, can't do graceful shutdown
+                pass
+
     def run(self):
         """Run the server (blocking). Creates an event loop if necessary."""
         # install an event loop if necessary
         loop = install_event_loop()
+        
+        # Set up signal handlers before starting
+        self._setup_signal_handlers()
+        
         try:
             loop.run_until_complete(self.a_run())
         except KeyboardInterrupt:
             logger.info("Server interrupted by KeyboardInterrupt")
-            # Set the exit event to ensure clean shutdown
-            if hasattr(self, "should_exit"):
-                self.should_exit.set()
         finally:
+            # Restore signal handlers
+            self._restore_signal_handlers()
+            
             # Ensure the loop is properly closed
             pending = asyncio.all_tasks(loop)
             for task in pending:
@@ -303,31 +394,17 @@ class Server:
 
         def protocol_factory():
             return self.protocol_cls(
-                server=(self.host or "", self.port), app=self.app
+                server=(self.host or "", self.port),
+                app=self.app,
+                ws_ping_interval=self.ws_ping_interval,
+                ws_ping_timeout=self.ws_ping_timeout,
             )
 
         loop = asyncio.get_running_loop()
 
-        # Create the shutdown event now that we have an event loop
-        self.should_exit = asyncio.Event()
-
-        # Setup signal handlers for graceful shutdown
-        def signal_handler(sig, frame):
-            logger.info(f"Received signal {sig}, shutting down...")
-            # Use call_soon_threadsafe for proper thread safety
-            loop.call_soon_threadsafe(self.should_exit.set)
-
-        # Register signal handlers (works on both Unix and Windows)
-        # Only register if we're in the main thread
-        try:
-            signal.signal(signal.SIGINT, signal_handler)
-            signal.signal(signal.SIGTERM, signal_handler)
-            # On Window#s, also handle SIGBREAK (Ctrl+Break)
-            if hasattr(signal, "SIGBREAK"):
-                signal.signal(signal.SIGBREAK, signal_handler)
-        except ValueError:
-            # signal only works in main thread - this is expected in tests
-            logger.debug("Signal handlers not registered (not in main thread)")
+        # Ensure the shutdown event exists now that we have an event loop
+        if self._should_exit is None:
+            self._should_exit = asyncio.Event()
 
         try:
             # Start lifespan
@@ -364,13 +441,25 @@ class Server:
             await self.should_exit.wait()
             logger.info("Shutting down server...")
 
-            # Close servers
+            # Graceful shutdown: stop accepting new connections
             if tcp_server:
                 tcp_server.close()
-                # await tcp_server.wait_closed() # commented out because it waits for all connections to close
+                # Wait for existing connections with timeout
+                try:
+                    await asyncio.wait_for(
+                        tcp_server.wait_closed(),
+                        timeout=self.shutdown_timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Shutdown timeout ({self.shutdown_timeout}s) reached, "
+                        "some connections may not have closed cleanly"
+                    )
 
             if http3_server:
                 http3_server.close()
+                # Give HTTP/3 connections a moment to close gracefully
+                await asyncio.sleep(0.5)
 
         finally:
             # Always shutdown lifespan
@@ -446,6 +535,8 @@ class Server:
                 *args,
                 app=self.app,
                 server=(self.host or "127.0.0.1", self.http3_port),
+                ws_ping_interval=self.ws_ping_interval,
+                ws_ping_timeout=self.ws_ping_timeout,
                 **kwargs,
             )
 

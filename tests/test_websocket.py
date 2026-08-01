@@ -12,7 +12,7 @@ import time
 import pytest
 from websockets.asyncio.client import connect
 
-from asgiri.server import HttpProtocolVersion, Server
+from asgiri.server import HttpProtocolVersion, LifespanPolicy, Server
 
 from .app import app
 
@@ -399,4 +399,73 @@ async def test_websocket_special_characters(unused_port: int, server_factory):
         for msg in special_messages:
             await websocket.send(msg)
             response = await websocket.recv()
-            assert response == f"Message text was: {msg}"
+        assert response == f"Message text was: {msg}"
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.asyncio
+async def test_websocket_ping_pong_keeps_connection_alive(unused_port: int):
+    """Test that server pings and client pongs keep connection alive."""
+    server = Server(
+        app=app,
+        host="127.0.0.1",
+        port=unused_port,
+        http_version=HttpProtocolVersion.HTTP_1_1,
+        lifespan=LifespanPolicy.DISABLED,
+        ws_ping_interval=0.2,
+        ws_ping_timeout=0.5,
+    )
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+    assert wait_for_server("127.0.0.1", unused_port)
+
+    try:
+        async with connect(f"ws://127.0.0.1:{unused_port}/ws") as websocket:
+            # Wait long enough for several ping/pong exchanges
+            await asyncio.sleep(0.7)
+            await websocket.send("hello")
+            response = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            assert response == "Message text was: hello"
+    finally:
+        server._shutdown_in_progress = True
+        if server._should_exit is not None:
+            server._should_exit.set()
+        server_thread.join(timeout=5)
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(15)
+@pytest.mark.asyncio
+async def test_websocket_ping_timeout_closes_unresponsive_client(unused_port: int):
+    """Test that server closes connection when client ignores pings."""
+    server = Server(
+        app=app,
+        host="127.0.0.1",
+        port=unused_port,
+        http_version=HttpProtocolVersion.HTTP_1_1,
+        lifespan=LifespanPolicy.DISABLED,
+        ws_ping_interval=0.2,
+        ws_ping_timeout=0.3,
+    )
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+    assert wait_for_server("127.0.0.1", unused_port)
+
+    try:
+        async with connect(f"ws://127.0.0.1:{unused_port}/ws") as websocket:
+            # Disable the client's automatic pong responses
+            websocket.pong = lambda *args, **kwargs: None  # type: ignore[assignment]
+            with pytest.raises(Exception):
+                await asyncio.wait_for(websocket.recv(), timeout=2.0)
+    finally:
+        server._shutdown_in_progress = True
+        if server._should_exit is not None:
+            server._should_exit.set()
+        server_thread.join(timeout=5)
+
+
+# End of file
+
+

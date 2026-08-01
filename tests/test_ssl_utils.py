@@ -5,7 +5,6 @@ These tests verify certificate generation, SSL context creation,
 and edge cases in SSL utilities.
 """
 
-import os
 import ssl
 import tempfile
 from pathlib import Path
@@ -247,6 +246,7 @@ def test_temp_file_cleanup_after_context_creation():
 
     try:
         context = create_ssl_context(cert_data=cert_pem, key_data=key_pem)
+        assert context is not None
 
         # Verify temp files were created
         assert len(created_files) >= 2  # cert and key
