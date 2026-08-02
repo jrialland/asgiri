@@ -79,11 +79,18 @@ class ProxyMiddleware:
         client = scope.get("client")
         client_host, client_port = client if client else ("", 0)
         scheme = scope.get("scheme", "http")
-        assert isinstance(scheme, str)
+        if not isinstance(scheme, str):
+            raise TypeError(f"scheme must be str, got {type(scheme).__name__}")
         http_version = scope.get("http_version", "1.1")
-        assert isinstance(http_version, str)
+        if not isinstance(http_version, str):
+            raise TypeError(
+                f"http_version must be str, got {type(http_version).__name__}"
+            )
         raw_path = scope.get("raw_path", b"")
-        assert isinstance(raw_path, bytes)
+        if not isinstance(raw_path, bytes):
+            raise TypeError(
+                f"raw_path must be bytes, got {type(raw_path).__name__}"
+            )
         path = scope["path"]
         for key, value in scope.get("headers", []):
             if key.startswith(b":"):
@@ -140,7 +147,10 @@ class ProxyMiddleware:
         :return: The target URL to proxy to, or None if it doesn't match.
         """
         root_path = scope.get("root_path", "")
-        assert isinstance(root_path, str)
+        if not isinstance(root_path, str):
+            raise TypeError(
+                f"root_path must be str, got {type(root_path).__name__}"
+            )
         path = scope["path"]
         matched = self.pattern.match(path[len(root_path):])
         if matched is None:

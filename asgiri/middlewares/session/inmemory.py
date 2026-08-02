@@ -87,7 +87,8 @@ class InMemorySessionBackend(SessionBackend):
         return None
 
     async def save_session(self, session: SessionDict) -> None:
-        assert session.session_id is not None
+        if session.session_id is None:
+            raise ValueError("session_id must be set before saving session")
         session.created_at = datetime.datetime.now(tz=datetime.timezone.utc)
         session.last_touched = session.created_at
         with self.lock:

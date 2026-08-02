@@ -26,7 +26,8 @@ class RedisSessionBackend(SessionBackend):
 
     @override
     async def save_session(self, session: SessionDict) -> None:
-        assert session.session_id is not None
+        if session.session_id is None:
+            raise ValueError("session_id must be set before saving session")
         redis_key = self._redis_key(session.session_id)
         mapping: dict[str, Any] = dict(session)
         mapping.pop("session_id", None)
