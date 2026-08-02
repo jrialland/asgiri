@@ -1,6 +1,8 @@
-from . import SessionBackend, SessionDict
-import redis.asyncio as aredis
 from typing import Any, override
+
+import redis.asyncio as aredis
+
+from . import SessionBackend, SessionDict
 
 
 class RedisSessionBackend(SessionBackend):

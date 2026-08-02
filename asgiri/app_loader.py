@@ -4,13 +4,14 @@ This module provides a function to load an ASGI (or WSGI) application, given a m
 Any validity checks on the application itself should be performed here.
 """
 
+import importlib
 import os
 import re
 import sys
-import importlib
-from asgiref.wsgi import WsgiToAsgi
-from asgiref.typing import ASGI3Application
+
 from asgiref.compatibility import guarantee_single_callable
+from asgiref.typing import ASGI3Application
+from asgiref.wsgi import WsgiToAsgi
 from loguru import logger
 
 app_spec_re = re.compile(r"^([\w.]+):([\w]+)$")

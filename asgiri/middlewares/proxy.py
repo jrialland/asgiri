@@ -11,19 +11,20 @@ This allows to serve the proxied location during development without needing to 
 
 import asyncio
 import re
+from typing import cast
+
 import httpx
 import websockets
-from typing import cast
 from asgiref.typing import (
     ASGI3Application,
-    Scope,
-    HTTPScope,
-    WebSocketScope,
     ASGIReceiveCallable,
     ASGISendCallable,
-    HTTPResponseStartEvent,
     HTTPResponseBodyEvent,
+    HTTPResponseStartEvent,
+    HTTPScope,
+    Scope,
     WebSocketAcceptEvent,
+    WebSocketScope,
     WebSocketSendEvent,
 )
 from loguru import logger

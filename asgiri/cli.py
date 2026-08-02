@@ -4,13 +4,13 @@ import argparse
 import os
 import sys
 
-
 from loguru import logger
+
+from .app_loader import load_application
+from .reload import Reloader, resolve_reload_dirs
 from .server import HttpProtocolVersion, LifespanPolicy, Server
 from .ssl_utils import generate_self_signed_cert
 from .workers import compute_workers_count, spawn_workers
-from .app_loader import load_application
-from .reload import Reloader, resolve_reload_dirs
 
 
 def create_parser() -> argparse.ArgumentParser:

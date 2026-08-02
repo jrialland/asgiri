@@ -12,6 +12,8 @@
 
 A high-performance ASGI server implementation supporting HTTP/1.1, HTTP/2, and HTTP/3 protocols with automatic protocol detection and seamless switching.
 
+![Comparison](./docs/comparison.png)
+
 ## Features
 
 - **Multi-Protocol Support**: Handles HTTP/1.1, HTTP/2, and HTTP/3 on the same port
@@ -23,7 +25,8 @@ A high-performance ASGI server implementation supporting HTTP/1.1, HTTP/2, and H
 - **ASGI 3.0 Compatible**: Works with any ASGI 3.0 application
 - **Async/Await**: Built on Python's asyncio for high concurrency
 - **Multiprocessing**: Run multiple worker processes with SO_REUSEPORT for better CPU utilization
-
+- **Hot reload mode**: Automatic reloads on file change (development mode)
+  
 ## Lore
 
 Deep in the hills of Kandy, Sri Lanka, stands the [Asgiri Maha Viharaya](https://en.wikipedia.org/wiki/Asgiri_Maha_Viharaya) — a sacred monastery that has been a beacon of wisdom and preservation for centuries. As the headquarters of the Asgiriya Chapter of Siyam Nikaya, this ancient temple holds the solemn duty of safeguarding one of Buddhism's most precious relics: the sacred tooth relic of Buddha.
@@ -31,6 +34,7 @@ Deep in the hills of Kandy, Sri Lanka, stands the [Asgiri Maha Viharaya](https:/
 Just as the monastery has faithfully served countless pilgrims across the ages, handling their requests with grace and precision, so too does this server aim to serve your web traffic. Like the monks who maintain both ancient traditions (the sacred tooth relic) and adapt to modern times, Asgiri the server bridges the old (HTTP/1.1), the new (HTTP/2), and the cutting edge (HTTP/3), automatically detecting which protocol each client speaks and responding with wisdom.
 
 The name `asgiri` reminds us that good software, like good monasteries, should be:
+
 - **Reliable** — Standing strong through the centuries
 - **Adaptable** — Serving all who come, regardless of their background
 - **Efficient** — Handling many requests with minimal resources
@@ -57,6 +61,33 @@ async def app(scope, receive, send):
 server = Server(app=app, host="127.0.0.1", port=8000)
 server.run()
 ```
+
+## Hot Reload (Development)
+
+Asgiri includes a development-time hot-reload mode that restarts your ASGI
+application automatically when source files change.
+
+```bash
+# Watch the app module's directory by default
+asgiri --reload myapp:app
+
+# Watch specific directories or files (repeatable)
+asgiri --reload --reload-dir ./src --reload-dir ./templates myapp:app
+
+# Ignore extra patterns and tune the debounce delay
+asgiri --reload --reload-ignore "*.log" --reload-delay-ms 300 myapp:app
+```
+
+Hot reload is **single-process only** and incompatible with `--workers > 1`.
+It also requires the optional `watchfiles` dependency:
+
+```bash
+pip install asgiri[reload]
+```
+
+By default, the watcher ignores build artifacts, virtual environments, version
+control, and hidden files. See the [CLI Guide](docs/CLI.md#hot-reload-options-development-only)
+for the full option list.
 
 ## Protocol Support
 
@@ -182,6 +213,7 @@ ASGIRI supports multiple methods for HTTP/2 negotiation:
 3. **Multiplexing**: True stream independence without head-of-line blocking
 
 For more details, see:
+
 - [Protocol Switching Guide](docs/PROTOCOL_SWITCHING.md)
 - [HTTP/3 Implementation](docs/HTTP3_IMPLEMENTATION.md)
 

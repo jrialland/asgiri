@@ -3,10 +3,23 @@ Database session backend implementation.
 This is a generic code that use DB-API 2.0 (PEP 249) - compliant drivers.
 """
 
-from . import SessionBackend, SessionDict
-from typing import Any, Callable, Generator, Iterable, Optional, Protocol, Sequence, Tuple, Union, runtime_checkable
-from contextlib import contextmanager
 import datetime
+from contextlib import contextmanager
+from typing import (
+    Any,
+    Callable,
+    Generator,
+    Iterable,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    Union,
+    runtime_checkable,
+)
+
+from . import SessionBackend, SessionDict
+
 
 # Define DB-API compliant Cursor protocol
 @runtime_checkable
