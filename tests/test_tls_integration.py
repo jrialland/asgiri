@@ -69,7 +69,7 @@ async def test_https_server_with_real_connection():
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE  # Accept self-signed cert
 
-            async with httpx.AsyncClient(verify=False) as client:
+            async with httpx.AsyncClient(verify=ssl_context) as client:
                 response = await client.get("https://127.0.0.1:8443/test")
                 assert response.status_code == 200
                 assert response.text == "Hello, HTTPS!"
@@ -142,8 +142,13 @@ async def test_https_server_with_cert_data():
 
     await asyncio.sleep(0.3)
 
+    # Build SSL context that accepts the self-signed cert for the test
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
     try:
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=ssl_context) as client:
             response = await client.get("https://127.0.0.1:8444/")
             assert response.status_code == 200
             assert response.text == "In-memory cert!"
@@ -194,9 +199,14 @@ async def test_https_with_http2():
 
     await asyncio.sleep(0.3)
 
+    # Build SSL context that accepts the self-signed cert for the test
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
     try:
         # httpx with HTTP/2 support
-        async with httpx.AsyncClient(verify=False, http2=True) as client:
+        async with httpx.AsyncClient(verify=ssl_context, http2=True) as client:
             response = await client.get("https://127.0.0.1:8445/")
             assert response.status_code == 200
 
